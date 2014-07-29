@@ -1,4 +1,7 @@
-from astropy.io import fits as pyfits
+try:
+    from astropy.io import fits as pyfits
+except ImportError:
+    import pyfits
 import sys,os
 from optparse import OptionParser
 

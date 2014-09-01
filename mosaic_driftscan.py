@@ -190,7 +190,12 @@ def main():
     Imagelist={}
 
     if options.swarp is None:
-        swarp=subprocess.check_output(['which','swarp']).strip()
+        # python 2.6 compatibility
+        try:
+            swarp=subprocess.check_output(['which','swarp']).strip()
+        except AttributeError:
+            swarp=subprocess.Popen(['which', 'swarp'],
+                                   stdout=subprocess.PIPE).communicate()[0].strip()                              
     else:
         swarp=options.swarp
 

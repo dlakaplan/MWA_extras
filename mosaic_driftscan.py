@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import logging, sys, os, glob, string, re, urllib, math, time
 from optparse import OptionParser
 import numpy
@@ -32,7 +34,7 @@ except:
                     
 suffix='.2d.fits'
 newsuffix='.weight.fits'
-swarpconfig='./mosaic.swarp'
+swarpconfig='mosaic.swarp'
 
 ######################################################################
 class MWAImage():
@@ -134,6 +136,19 @@ def copy_driftscanbeam(template, image,
     fX.close()
     fY.close()
     return beamXXout, beamYYout
+
+
+######################################################################
+def circular_mean(x):
+    """
+    http://en.wikipedia.org/wiki/Mean_of_circular_quantities
+    x should be in radians or astropy.Angle etc.
+    value returned will be in same units
+    """
+    c=numpy.cos(x)
+    s=numpy.sin(x)
+    return numpy.arctan2(s.mean(), c.mean())
+
 ######################################################################        
 
 def main():
@@ -163,11 +178,15 @@ def main():
                       type='int',
                       help='Swarp oversampling [default=%default]')
     parser.add_option('--ra',dest='ra', default=None,
+                      help='Center RA of mosaic in hours or "middle" [default=auto]')
+    parser.add_option('--dec',dest='dec', default=None,
+                      help='Center Dec of mosaic in degrees [default=auto]')
+    parser.add_option('--xsize',dest='xpix', default=None,
                       type='float',
-                      help='Center RA of mosaic in hours [default=auto]')
-    parser.add_option('--dec',dest='dec', default='0',
+                      help='Width of image (size of x-axis) in pixels [default=span of drift scan + image width]')
+    parser.add_option('--ysize',dest='ypix', default=None,
                       type='float',
-                      help='Center Dec of mosaic in degrees [default=%default]')
+                      help='Width of image (size of y-axis) in pixels [default=image height]')
     parser.add_option('--proj',dest='projection',default='MOL',
                       type='choice',
                       choices=['MOL','ZEA','SIN','AIT'],
@@ -184,8 +203,16 @@ def main():
                       help="Increase verbosity of output")
     (options, args) = parser.parse_args()
 
+        
     if (options.verbose):
         logger.setLevel(logging.INFO)
+
+    localswarpconfig=os.path.join(os.path.split(__file__)[0], swarpconfig)
+    if not os.path.exists(localswarpconfig):
+        logger.error('Cannot find swarp config file %s' % localswarpconfig)
+        sys.exit(1)
+    logger.info('Will use config file %s...' % localswarpconfig)
+
     inputfiles=args
     Imagelist={}
 
@@ -541,7 +568,6 @@ def main():
                 tempfiles.append(Imagelist[obsid].ibeam)
         logger.info('\n')
 
-    sys.exit(0)
     times['weight']=time.time()
     logger.info('Creating weight images...')
     ##############################
@@ -590,25 +616,54 @@ def main():
     # and now swarp together
     # get image centers
     RAcenters=[]
+    Deccenters=[]
     images=[]
     for obsid in sorted(Imagelist.keys()):
         f=pyfits.open(Imagelist[obsid].iimage)
         RAcenters.append(f[0].header['CRVAL1'])
+        Deccenters.append(f[0].header['CRVAL2'])
         images.append(Imagelist[obsid].iimage)
     RAcenters=numpy.array(RAcenters)
-    RAcenter=RAcenters.mean()
+    RAcenter=numpy.degrees(circular_mean(numpy.radians(RAcenters)))
     if options.ra is None:
         # make integer hours
         RAcenterhours=Angle(int(round(RAcenter/15.0)), unit=u.hour)
     else:
-        RAcenterhours=Angle(options.ra, unit=u.hour)
-    Deccenter=Angle(options.dec, unit=u.deg)
+        if options.ra=='middle':
+            RAcenter=RAcenters[len(RAcenters)/2]
+            # make integer hours
+            RAcenterhours=Angle(int(round(RAcenter/15.0)), unit=u.hour)
+        else:
+            try:
+                RAcenterhours=Angle(float(options.ra), unit=u.hour)
+            except:
+                logger.warning('Unable to interpret ra center %s' % options.ra)
+                RAcenterhours=Angle(int(round(RAcenter/15.0)), unit=u.hour)
+
+    # for a single Dec strip these would all be the same
+    # but allow for multiple Dec's
+    Deccenter=numpy.unique(Deccenters).mean()
+    # command-line option Dec overwrites automatic Dec
+    if options.dec is None:
+        Deccenter=Angle(Deccenter, unit=u.deg)
+    else:
+        try:
+            Deccenter=Angle(float(options.dec), unit=u.deg)
+        except:
+            logger.warning('Unable to interpret dec center %s' % options.dec) 
+            Deccenter=Angle(Deccenter, unit=u.deg)
+            
+    # And the image width and height
+    width=(f[0].header['NAXIS1'])
+    height=(f[0].header['NAXIS2'])
+    
     center='%s,%s' % (RAcenterhours.to_string(unit=u.hour, sep=':'),
                                      Deccenter.to_string(unit=u.deg, sep=':'))
-    logger.info('Determined center RA=%sh, Dec=%s' % (RAcenterhours.to_string(unit=u.hour, sep=':'),
+    logger.info('Determined center RA=%sh, Dec=%sd' % (RAcenterhours.to_string(unit=u.hour, sep=':'),
                                                       Deccenter.to_string(unit=u.deg, sep=':')))
+
     command='%s -c %s %s -OVERSAMPLING %d -CENTER %s -IMAGE_SIZE 0' % (swarp,
-                                                                       swarpconfig,
+                                                                       localswarpconfig,
                                                                        ','.join(images),
                                                                        options.oversample,
                                                                        center)

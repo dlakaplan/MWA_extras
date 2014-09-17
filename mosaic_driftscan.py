@@ -152,6 +152,10 @@ def circular_mean(x):
 ######################################################################        
 
 def main():
+
+
+    localswarpconfig=os.path.join(os.path.split(__file__)[0], swarpconfig)
+    
     usage="Usage: %prog [options] <files>\n"
     usage+="\tMosaic together MWA driftscan data\n"
     usage+="\tImages should be either raw XX,YY or primary-beam corrected I (or Q or U or V)\n"
@@ -181,12 +185,6 @@ def main():
                       help='Center RA of mosaic in hours or "middle" [default=auto]')
     parser.add_option('--dec',dest='dec', default=None,
                       help='Center Dec of mosaic in degrees [default=auto]')
-    parser.add_option('--xsize',dest='xpix', default=None,
-                      type='float',
-                      help='Width of image (size of x-axis) in pixels [default=span of drift scan + image width]')
-    parser.add_option('--ysize',dest='ypix', default=None,
-                      type='float',
-                      help='Width of image (size of y-axis) in pixels [default=image height]')
     parser.add_option('--proj',dest='projection',default='MOL',
                       type='choice',
                       choices=['MOL','ZEA','SIN','AIT'],
@@ -197,6 +195,9 @@ def main():
                       help='SWARP output root [default=%default]')
     parser.add_option('--swarp',dest='swarp',default=None,
                       help='Path to Swarp executable [default=search path]')
+    parser.add_option('--config',dest='config',default=None,
+                      help='Path to separate Swarp config file [default=%s]' % localswarpconfig)
+
     parser.add_option('--clean',action="store_true",dest="clean",default=False,
                       help="Clean temporary files?")
     parser.add_option('-v','--verbose',action="store_true",dest="verbose",default=False,
@@ -207,7 +208,8 @@ def main():
     if (options.verbose):
         logger.setLevel(logging.INFO)
 
-    localswarpconfig=os.path.join(os.path.split(__file__)[0], swarpconfig)
+    if options.config is not None:
+        localswarpconfig=options.config
     if not os.path.exists(localswarpconfig):
         logger.error('Cannot find swarp config file %s' % localswarpconfig)
         sys.exit(1)

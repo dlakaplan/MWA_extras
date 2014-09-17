@@ -139,7 +139,7 @@ def copy_driftscanbeam(template, image,
 def main():
     usage="Usage: %prog [options] <files>\n"
     usage+="\tMosaic together MWA driftscan data\n"
-    usage+="\tImages should be either raw XX,YY or primary-beam correct I (or Q or U or V)\n"
+    usage+="\tImages should be either raw XX,YY or primary-beam corrected I (or Q or U or V)\n"
     usage+="\tXX,YY data will be converted into Stokes I\n"
     usage+="\tStokes I beams will be computed for optimal weighting\n"
     usage+="\tswarp is used for mosaicing\n"
@@ -212,6 +212,7 @@ def main():
         if not Imagelist.has_key(obsid):
             Imagelist[obsid]=MWAImage(obsid)
         mwaimage=Imagelist[obsid]            
+        currentstokes=None
         try:
             f=pyfits.open(file)
             if f[0].header['CTYPE3']=='STOKES':
@@ -221,10 +222,13 @@ def main():
             if not polaxis is None:
                 if f[0].header['CRVAL%d' % polaxis]==-5:
                     mwaimage.ximage=file
+                    currentstokes='XX'
                 elif f[0].header['CRVAL%d' % polaxis]==-6:
                     mwaimage.yimage=file
+                    currentstokes='YY'
                 elif f[0].header['CRVAL%d' % polaxis]>=1 and f[0].header['CRVAL%d' % polaxis]<=4:
                     mwaimage.iimage=file
+                    currentstokes='I'
                 else:
                     logger.warning('Do not know how to process Stokes=%d for %s; skipping...' % (
                         f[0].header['CRVAL%d' % polaxis], file))
@@ -232,13 +236,29 @@ def main():
             else:
                 if 'XX' in file:
                     mwaimage.ximage=file
+                    currentstokes='XX'
                 elif 'YY' in file:
                     mwaimage.yimage=file                
+                    currentstokes='YY'
+                
+            # see if beams already exist
+            # would be identified through header keywords
+            if 'BEAM' in f[0].header.keys():
+                if currentstokes=='I' and os.path.exists(f[0].header['BEAM']):
+                    mwaimage.ibeam=f[0].header['BEAM']
+                elif currentstokes=='XX' and os.path.exists(f[0].header['BEAM']):
+                    mwaimage.xbeam=f[0].header['BEAM']
+                elif currentstokes=='YY' and os.path.exists(f[0].header['BEAM']):
+                    mwaimage.ybeam=f[0].header['BEAM']
+                    
         except:
             if 'XX' in file:
                 mwaimage.ximage=file
+                currentstokes='XX'
             elif 'YY' in file:
                 mwaimage.yimage=file
+                currentstokes='YY'
+                
         if os.path.exists('%d.metafits' % obsid):
             mwaimage.metafits='%d.metafits' % obsid
 
@@ -246,7 +266,9 @@ def main():
         len(inputfiles), len(Imagelist.keys())))
 
     times['beams']=time.time()
+    ##############################
     # now loop through and do what needs to be done
+    ##############################
     beams={}
     tempfiles=[]
     for obsid in sorted(Imagelist.keys()):
@@ -266,6 +288,15 @@ def main():
         if Imagelist[obsid].metafits is not None:
             s+=' meta=%s' % Imagelist[obsid].metafits
         logger.info(s)
+
+        if Imagelist[obsid].xbeam is not None or Imagelist[obsid].ibeam is not None:
+            s='%d: ' % obsid
+            if Imagelist[obsid].xbeam is not None:
+                s+='(XXbeam,YYbeam)=(%s, %s)' % (Imagelist[obsid].xbeam,
+                                                 Imagelist[obsid].ybeam)
+            if Imagelist[obsid].ibeam is not None:
+                s+=' Ibeam=%s' % Imagelist[obsid].ibeam
+            logger.info(s)
 
         if Imagelist[obsid].iimage is None:
             # no I image exists: deal with XX, YY
@@ -345,10 +376,18 @@ def main():
                 if not result:
                     logger.error('Error updating FITS header of %s' % Imagelist[obsid].yimage)
                     sys.exit(1)
+
+            ##############################
             # now create the beams
-            fx=pyfits.open(Imagelist[obsid].ximage)
+            ##############################
+            fx=pyfits.open(Imagelist[obsid].ximage,'update')
+            fy=pyfits.open(Imagelist[obsid].yimage,'update')
             delays=[int(x) for x in fx[0].header['DELAYS'].split(',')]
-            if not options.copy_beam or (not beams.has_key(fx[0].header['DELAYS'])):            
+            if Imagelist[obsid].xbeam is not None and Imagelist[obsid].ybeam is not None:
+                logger.info('XX,YY beams already exists for %d; using %s,%s...' % (
+                    obsid, Imagelist[obsid].xbeam, Imagelist[obsid].ybeam))
+
+            elif not options.copy_beam or (not beams.has_key(fx[0].header['DELAYS'])):            
                 logger.info('Creating primary beams for %d' % obsid)
                 out=make_beam.make_beam(Imagelist[obsid].ximage, ext=0, delays=delays,
                                         analytic_model=options.analytic_model,
@@ -360,6 +399,10 @@ def main():
                 Imagelist[obsid].xbeam, Imagelist[obsid].ybeam=out
                 beams[fx[0].header['DELAYS']]=obsid
                 logger.info('Wrote %s,%s' % (out[0], out[1]))
+                fx[0].header['BEAM']=Imagelist[obsid].xbeam
+                fy[0].header['BEAM']=Imagelist[obsid].ybeam
+                fx.flush()
+                fy.flush()
                 tempfiles+=out
             else:
                 logger.info('Copying beam from %s to %s' % (Imagelist[beams[fx[0].header['DELAYS']]].ximage,
@@ -369,9 +412,17 @@ def main():
                 if result is None:
                     sys.exit(1)
                 Imagelist[obsid].xbeam, Imagelist[obsid].ybeam=result
+                fx[0].header['BEAM']=Imagelist[obsid].xbeam
+                fy[0].header['BEAM']=Imagelist[obsid].ybeam
+                fx.flush()
+                fy.flush()
                 tempfiles+=result
+            fx.close()
+            fy.close()
+            fx=pyfits.open(Imagelist[obsid].ximage)
+            fy=pyfits.open(Imagelist[obsid].yimage)
+
             # and primary-beam correct
-            fy=pyfits.open(Imagelist[obsid].ximage)
             fxB=pyfits.open(Imagelist[obsid].xbeam)
             fyB=pyfits.open(Imagelist[obsid].ybeam)
             fx[0].data=(fx[0].data/fxB[0].data+fy[0].data/fyB[0].data)/2.0
@@ -390,6 +441,10 @@ def main():
                 os.remove(Imagelist[obsid].ibeam)
             fxB.writeto(Imagelist[obsid].ibeam)
             logger.info('Wrote I beam %s' % Imagelist[obsid].ibeam)
+            fi=pyfits.open(Imagelist[obsid].iimage, 'update')
+            fi[0].header['BEAM']=Imagelist[obsid].ibeam
+            fi.flush()
+            fi.close()
             tempfiles.append(Imagelist[obsid].ibeam)
         else:
             # Stokes I (corrected) exists
@@ -435,49 +490,64 @@ def main():
             if not result:
                 logger.error('Error updating FITS header of %s' % Imagelist[obsid].iimage)
                 sys.exit(1)
+            ##############################
             # now create the beams
-            fi=pyfits.open(Imagelist[obsid].iimage)
+            ##############################            
+            
+            fi=pyfits.open(Imagelist[obsid].iimage, 'update')
             delays=[int(x) for x in fi[0].header['DELAYS'].split(',')]
-            if not options.copy_beam or (not beams.has_key(fi[0].header['DELAYS'])):
-                logger.info('Creating primary beams for %d' % obsid)
-                out=make_beam.make_beam(Imagelist[obsid].iimage, ext=0, delays=delays,
-                                        analytic_model=options.analytic_model,
-                                        jones=False,
-                                        precess=options.precess)
-                if out is None:
-                    logger.error('Problem creating primary beam for %s' % obsid)
-                    sys.exit(1)
-                Imagelist[obsid].xbeam, Imagelist[obsid].ybeam=out
-                beams[fi[0].header['DELAYS']]=obsid
-                logger.info('Wrote %s,%s' % (out[0], out[1]))
-                tempfiles+=out
+
+            if Imagelist[obsid].ibeam is not None:
+                logger.info('I beam already exists for %d; using %s...' % (
+                    obsid, Imagelist[obsid].ibeam))
             else:
-                logger.info('Copying beam from %s to %s' % (Imagelist[beams[fi[0].header['DELAYS']]].iimage,
-                                                            Imagelist[obsid].iimage))
-                result=copy_driftscanbeam(Imagelist[beams[fi[0].header['DELAYS']]].iimage,
-                                          Imagelist[obsid].iimage)
-                if result is None:
-                    sys.exit(1)
-                Imagelist[obsid].xbeam, Imagelist[obsid].ybeam=result
-                tempfiles+=result
-            # create the I beam
-            fxB=pyfits.open(Imagelist[obsid].xbeam)
-            fyB=pyfits.open(Imagelist[obsid].ybeam)
-            fxB[0].data=(fxB[0].data+fyB[0].data)/2.0
-            fxB[0].header['CRVAL%d' % polaxis]=1
-            Imagelist[obsid].ibeam=Imagelist[obsid].xbeam.replace('_beamXX','_beamI')
-            Imagelist[obsid].ibeam=Imagelist[obsid].ibeam.replace('_XX','_I')
-            if os.path.exists(Imagelist[obsid].ibeam):
-                os.remove(Imagelist[obsid].ibeam)
-            fxB.writeto(Imagelist[obsid].ibeam)
-            logger.info('Wrote I beam %s' % Imagelist[obsid].ibeam)
-            tempfiles.append(Imagelist[obsid].ibeam)
+                if not options.copy_beam or (not beams.has_key(fi[0].header['DELAYS'])):
+                    logger.info('Creating primary beams for %d' % obsid)
+                    out=make_beam.make_beam(Imagelist[obsid].iimage, ext=0, delays=delays,
+                                            analytic_model=options.analytic_model,
+                                            jones=False,
+                                            precess=options.precess)
+                    if out is None:
+                        logger.error('Problem creating primary beam for %s' % obsid)
+                        sys.exit(1)
+                    Imagelist[obsid].xbeam, Imagelist[obsid].ybeam=out
+                    beams[fi[0].header['DELAYS']]=obsid
+                    logger.info('Wrote %s,%s' % (out[0], out[1]))
+                    tempfiles+=out
+                else:
+                    logger.info('Copying beam from %s to %s' % (Imagelist[beams[fi[0].header['DELAYS']]].iimage,
+                                                                Imagelist[obsid].iimage))
+                    result=copy_driftscanbeam(Imagelist[beams[fi[0].header['DELAYS']]].iimage,
+                                              Imagelist[obsid].iimage)
+                    if result is None:
+                        sys.exit(1)
+                    Imagelist[obsid].xbeam, Imagelist[obsid].ybeam=result
+                    tempfiles+=result
+                # create the I beam
+                fxB=pyfits.open(Imagelist[obsid].xbeam)
+                fyB=pyfits.open(Imagelist[obsid].ybeam)
+                fxB[0].data=(fxB[0].data+fyB[0].data)/2.0
+                fxB[0].header['CRVAL%d' % polaxis]=1
+                Imagelist[obsid].ibeam=Imagelist[obsid].xbeam.replace('_beamXX','_beamI')
+                Imagelist[obsid].ibeam=Imagelist[obsid].ibeam.replace('_XX','_I')
+                if os.path.exists(Imagelist[obsid].ibeam):
+                    os.remove(Imagelist[obsid].ibeam)
+                fxB.writeto(Imagelist[obsid].ibeam)
+                logger.info('Wrote I beam %s' % Imagelist[obsid].ibeam)
+                # update the header so that the beam can be re-used in the future
+                fi[0].header['BEAM']=Imagelist[obsid].ibeam
+                fi.flush()
+                fi.close()
+                tempfiles.append(Imagelist[obsid].ibeam)
         logger.info('\n')
 
+    sys.exit(0)
     times['weight']=time.time()
     logger.info('Creating weight images...')
+    ##############################
     # now we should have correct I and I beams for everything
     # make 2D images and weights
+    ##############################
     for obsid in sorted(Imagelist.keys()):
         root,ext=os.path.splitext(Imagelist[obsid].iimage)    
         if options.reduce:
@@ -515,7 +585,8 @@ def main():
         tempfiles.append(weightfile)
 
     times['swarp']=time.time()
-    logger.info('\nSwarping...')
+    logger.info('\n')
+    logger.info('Swarping...')
     # and now swarp together
     # get image centers
     RAcenters=[]

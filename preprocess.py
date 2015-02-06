@@ -5,12 +5,52 @@ import urllib2, urllib
 import base64
 import time
 import subprocess
+from astropy.table import Table,Column
+import collections
+
+##############################
+# Custom formatter
+# http://stackoverflow.com/questions/1343227/can-pythons-logging-format-be-modified-depending-on-the-message-log-level
+class MyFormatter(logging.Formatter):
+    err_fmt  = '\n\n# %(asctime)s %(levelname)s:%(name)s: %(message)s\n\n'
+    warning_fmt  = '\n# %(asctime)s %(levelname)s:%(name)s: %(message)s\n'
+    other_fmt  = '# %(asctime)s %(levelname)s:%(name)s: %(message)s'
+
+    def __init__(self, fmt=other_fmt):
+        logging.Formatter.__init__(self, fmt)
+
+    def format(self, record):
+
+        # Save the original format configured by the user
+        # when the logger formatter was instantiated
+        format_orig = self._fmt
+
+        # Replace the original format with one customized by logging level
+        if record.levelno == logging.WARNING:
+            self._fmt = MyFormatter.warning_fmt
+
+        elif record.levelno == logging.ERROR:
+            self._fmt = MyFormatter.err_fmt
+
+        # Call the original formatter class to do the grunt work
+        result = logging.Formatter.format(self, record)
+
+        # Restore the original format configured by the user
+        self._fmt = format_orig
+
+        return result
+    
 
 # configure the logging
 logFormatter=logging.Formatter('# %(asctime)s %(levelname)s:%(name)s: %(message)s')
 logging.basicConfig(format='# %(asctime)s %(levelname)s:%(name)s: %(message)s')
 logger = logging.getLogger('preprocess')
-                    
+
+fmt = MyFormatter()
+hdlr = logging.StreamHandler(sys.stdout)
+
+hdlr.setFormatter(fmt)
+logger.addHandler(hdlr)
 logger.setLevel(logging.WARNING)
 
 import mwapy
@@ -323,12 +363,6 @@ class Observation():
                  copycommand='rsync -aruvP'):
         self.obsid=obsid
         self.basedir=basedir
-        os.chdir(basedir)
-        self.outputdir=os.path.join(self.basedir,
-                                    str(self.obsid),
-                                    '')
-        observation=metadata.MWA_Observation(self.obsid)
-        logger.debug(observation)
         self.downloadedfiles=None
         self.metafits=None
         self.cottercommand=None
@@ -339,17 +373,27 @@ class Observation():
         self.cleanms=cleanms
         self.destination=None
 
+        self.outputdir=os.path.join(self.basedir,
+                                    str(self.obsid),
+                                    '')
+        os.chdir(basedir)
+        logger.info('##################################################')
+        logger.info('%d' % self.obsid)
+        observation=metadata.MWA_Observation(self.obsid)
+        logger.debug('\n' + str(observation))
+
     ##############################
     def __del__(self):
         if self.cleanfits:
             logger.warning('Deleting downloaded FITS files %s' % ','.join(self.downloadedfiles))
             for f in self.downloadedfiles:
-                os.remove(f)
+                os.remove(os.path.join(self.outputdir,f))
         if self.cleanms:
             if self.destination is None:
                 logger.warning('Requesting delete of MS file %s, but it has not been copied elsewhere' % self.msfile)
             else:
-                shutil.rmtree(self.msfile)
+                logger.warning('Deleting MS file %s' % self.msfile)
+                shutil.rmtree(os.path.join(self.outputdir,self.msfile))
 
     ##############################
     def download(self, numdownload=4):
@@ -400,7 +444,7 @@ class Observation():
                 logger.warning('MSfile %s exists; will clobber' % self.msfile)
                 shutil.rmtree(self.msfile)
                 
-        logger.info('Will run: %s' % ' '.join(self.cottercommand))
+        logger.info('Will run:\n\t%s' % ' '.join(self.cottercommand))
         p=subprocess.Popen(' '.join(self.cottercommand),
                            stderr=subprocess.PIPE,
                            stdout=subprocess.PIPE,
@@ -431,7 +475,7 @@ class Observation():
             copycommand=[self.copycommand,
                          self.msfile,
                          destination + '/']
-            logger.info('Will run: %s' % ' '.join(copycommand))
+            logger.info('Will run:\n\t%s' % ' '.join(copycommand))
             p=subprocess.Popen(' '.join(copycommand),
                            stderr=subprocess.PIPE,
                            stdout=subprocess.PIPE,
@@ -448,7 +492,11 @@ class Observation():
                 if returncode is not None:
                     break
                 time.sleep(1)
-            logger.info('%s copied to %s' % (msfile,destination))
+            if returncode > 0:
+                logger.error('Error copying %s to %s' % (self.msfile, destination))
+                return None
+
+            logger.info('%s copied to %s' % (self.msfile,destination))
             self.destination=destination
             return True
 
@@ -468,6 +516,8 @@ def main():
                       help='Project ID')
     parser.add_option('--destination',dest='destination',default=None,
                       help='Final destination to (remote) copy the MS file')
+    parser.add_option('--summaryname',dest='summaryname',default=None,
+                      help='Name for output summary table')
     parser.add_option('--downloads',dest='downloads',default=4,type='int',
                       help='Number of simultaneous NGAS downloads [default=%default]')
     parser.add_option('--timeres',dest='timeres',default=4,type='int',
@@ -478,12 +528,16 @@ def main():
                       help='Number of CPUs for cotter [default %default]')
     parser.add_option('--clobber',dest='clobber',default=False,action='store_true',
                       help='Clobber existing MS file? [default=False]')
+    parser.add_option('--cleanall',dest='cleanall',default=False,action='store_true',
+                      help='Delete downloaded FITS files and original MS file when done? [default=False]')
     parser.add_option('--cleanfits',dest='cleanfits',default=False,action='store_true',
                       help='Delete downloaded FITS files when done? [default=False]')
     parser.add_option('--cleanms',dest='cleanms',default=False,action='store_true',
                       help='Delete original MS file when done? [default=False]')
     parser.add_option('--copycommand',dest='copycommand',default='rsync -aruvP',
                       help='Command for (remote) copying [default=%default]')
+    parser.add_option('--summaryformat',dest='summaryformat',default='ascii.commented_header',
+                      help='Format for output summary table (from astropy.table) [default=%default]')
     parser.add_option("-v", "--verbose", dest="loudness", default=0, action="count",
                       help="Each -v option produces more informational/debugging output")
     parser.add_option("-q", "--quiet", dest="quietness", default=0, action="count",
@@ -491,6 +545,9 @@ def main():
 
 
     (options, args) = parser.parse_args()
+    if options.cleanall:
+        options.cleanfits=True
+        options.cleanms=True
 
     loglevels = {0: [logging.DEBUG, 'DEBUG'],
                  1: [logging.INFO, 'INFO'],
@@ -546,9 +603,13 @@ def main():
         o=metadata.MWA_Observation_Summary(item)
         logger.info(str(o))
 
-    logger.info('Processing observations...')
+
+    data=None
+
+    logger.info('Processing observations...\n\n')
     basedir=os.path.abspath(os.curdir)
     for obs in results:
+        processstart=datetime.datetime.now()
         observation=Observation(obs[0], basedir=basedir,
                                 copycommand=options.copycommand,
                                 clobber=options.clobber,
@@ -556,21 +617,48 @@ def main():
                                 cleanfits=options.cleanfits)
         downloadedfiles=observation.download(numdownload=options.downloads)
         if downloadedfiles is None:
-            sys.exit(1)            
+            break
 
         if observation.makemetafits() is None:
-            sys.exit(1)
+            break
             
         msfilesize=observation.cotter(cottercpus=options.cottercpus,
                                       timeres=options.timeres,
                                       freqres=options.freqres)
         if msfilesize is None:
-            sys.exit(1)
+            break
 
-        observation.copy(options.destination)
+        if options.destination is not None and observation.copy(options.destination) is None:
+            break
+
+        row=collections.OrderedDict({'date': processstart.strftime('%Y-%m-%dT%H:%M:%S'),
+                                     'obsid': obs[0],
+                                     'user': os.environ['USER'],
+                                     'host': socket.gethostname(),
+                                     'cotter': cotterversion.replace(' ','_'),
+                                     'mwapy': mwapy.__version__,
+                                     'rawfiles': len(observation.downloadedfiles),
+                                     'msfilesize': msfilesize})
+        if options.destination is not None:
+            row['msfile']=os.path.join(options.destination,observation.msfile)
+        else:
+            row['msfile']=os.path.join(observation.outputdir,observation.msfile)
+        if data is None:
+            data=Table([row])
+        else:
+            data.add_row(row)
     os.chdir(basedir)
+    if data is not None and options.summaryname is not None:
+        data=data[('date','obsid','user','host',
+                   'cotter','mwapy','rawfiles','msfilesize','msfile')]
+        try:
+            data.write(options.summaryname,format=options.summaryformat)
+            logger.info('Summary table written to %s' % options.summaryname)
+        except Exception, e:
+            logger.error('Unable to write summary table %s with format %s:\n%s' % (options.summaryname,
+                                                                                   options.summaryformat,
+                                                                                   e))
 
-        
             
         
                                                                    

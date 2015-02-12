@@ -351,6 +351,29 @@ def get_size(start_path = '.'):
             total_size += os.path.getsize(fp)
     return total_size
 
+######################################################################
+def get_free(path=None):
+    if path is None:
+        path=os.path.abspath(os.cwd())
+
+    if ':' in path:
+        # assume a remote location
+        # need ssh
+        host,path=path.split(':')
+        command='ssh %s "df -k %s"' % (host,path)
+        try:
+            result=subprocess.check_output(command, shell=True)
+            return int(result.split('\n')[1].split()[3])*1024
+        except Exception, e:
+            logger.error('Unable to check free space on %s:%s\n%s' % (host,path,e))
+            return 0
+    else:
+        # it is local
+        try:
+            stat=os.statvfs(path)
+        except OSError:
+            return 0
+        return stat.f_bavail*stat.f_bsize
 
 
 ######################################################################
@@ -372,6 +395,9 @@ class Observation():
         self.cleanfits=cleanfits
         self.cleanms=cleanms
         self.destination=None
+        self.rawsize=None
+        self.fitssize=None
+        self.mssize=None
 
         self.outputdir=os.path.join(self.basedir,
                                     str(self.obsid),
@@ -379,8 +405,16 @@ class Observation():
         os.chdir(basedir)
         logger.info('##################################################')
         logger.info('%d' % self.obsid)
-        observation=metadata.MWA_Observation(self.obsid)
-        logger.debug('\n' + str(observation))
+        self.observation=metadata.MWA_Observation(self.obsid)
+        logger.debug('\n' + str(self.observation))
+        
+
+        obsinfo=metadata.fetch_obsinfo(self.obsid)
+        self.rawsize=sum([obsinfo['files'][f]['size'] for f in obsinfo['files'].keys()])
+        self.fitssize=sum([obsinfo['files'][f]['size']*(obsinfo['files'][f]['filetype']==8) for f in obsinfo['files'].keys()])
+        logger.info('Raw data size is %.1f MB' % (self.rawsize/1024./1024.))
+
+
 
     ##############################
     def __del__(self):
@@ -397,6 +431,11 @@ class Observation():
 
     ##############################
     def download(self, numdownload=4):
+        if self.rawsize is not None and self.rawsize > 0 and self.rawsize > get_free(self.basedir):
+            logger.error('Data download will require %.1f MB, but only %.1f MB free space on %s' % (self.rawsize/1024./1024,
+                                                                                                    get_free(self.basedir)/1024./1024,
+                                                                                                    self.basedir))
+            return None
         self.downloadedfiles=run_obsdownload(self.obsid, numdownload=numdownload)
         return self.downloadedfiles
     ##############################
@@ -417,6 +456,18 @@ class Observation():
     def cotter(self, cottercpus=4,
                timeres=4,
                freqres=40):
+
+
+        compressionfactor_time=(timeres/self.observation.inttime)
+        compressionfactor_freq=(freqres/self.observation.fine_channel)
+        logger.info('Expect compression of %d in time and %d in frequency' % (compressionfactor_time,
+                                                                              compressionfactor_freq))
+        self.mssize=self.fitssize/compressionfactor_time/compressionfactor_freq
+        if self.mssize is not None and self.mssize > 0 and self.mssize > get_free(self.basedir):
+            logger.error('Cotter will require %.1f MB, but only %.1f MB free space on %s' % (self.mssize/1024./1024,
+                                                                                             get_free(self.basedir)/1024./1024,
+                                                                                             self.basedir))
+            return None
 
         os.chdir(self.outputdir)
         self.useflagfiles=False
@@ -465,13 +516,19 @@ class Observation():
             logger.error('MSfile %s was not created' % self.msfile)
             return None
 
-        size=get_size(self.msfile)
-        logger.info('MSfile %s was created with size %d bytes' % (self.msfile,size))
-        return size
+        self.mssize=get_size(self.msfile)
+        logger.info('MSfile %s was created with size %d bytes' % (self.msfile,self.mssize))
+        return self.mssize
     
     ##############################
     def copy(self, destination):
         if destination is not None:
+            if self.mssize is not None and self.mssize > 0 and self.mssize > get_free(destination):
+                logger.error('Copy will require %.1f MB, but only %.1f MB free space on %s' % (self.mssize/1024./1024,
+                                                                                               get_free(destination)/1024./1024,
+                                                                                               destination))
+                return None
+
             copycommand=[self.copycommand,
                          self.msfile,
                          destination + '/']
@@ -497,6 +554,33 @@ class Observation():
                 return None
 
             logger.info('%s copied to %s' % (self.msfile,destination))
+
+            copycommand=[self.copycommand,
+                         self.metafits,
+                         destination + '/']
+            logger.info('Will run:\n\t%s' % ' '.join(copycommand))
+            p=subprocess.Popen(' '.join(copycommand),
+                           stderr=subprocess.PIPE,
+                           stdout=subprocess.PIPE,
+                           shell=True,
+                           close_fds=False)
+            while True:
+                p.stdout.flush()
+                p.stderr.flush()
+                for l in p.stdout.readlines():
+                    logger.debug(l.rstrip())
+                for l in p.stderr.readlines():
+                    logger.error(l.rstrip())
+                returncode=p.poll()
+                if returncode is not None:
+                    break
+                time.sleep(1)
+            if returncode > 0:
+                logger.error('Error copying %s to %s' % (self.metafits, destination))
+                return None
+
+            logger.info('%s copied to %s' % (self.metafits,destination))
+
             self.destination=destination
             return True
 

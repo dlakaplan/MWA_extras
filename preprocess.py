@@ -590,7 +590,7 @@ def main():
 
     observation_num=None
 
-    usage="Usage: %prog [options]\n"
+    usage="Usage: %prog [options] <obsids>\n"
     parser = OptionParser(usage=usage)
     parser.add_option('--start',dest='starttime',default=None,type='str',
                       help='Starting time for processing (GPSseconds or ISO UT date)')
@@ -672,6 +672,7 @@ def main():
     logger.info('Using cotter version %s' % cotterversion)
     logger.info('Using AOFlagger version %s' % AOFlaggerversion)
 
+    results=[]
     if options.project is None:
         results=metadata.fetch_observations(mintime=GPSstart-1,
                                             maxtime=GPSstop+1)
@@ -679,6 +680,12 @@ def main():
         results=metadata.fetch_observations(mintime=GPSstart-1,
                                             maxtime=GPSstop+1,
                                             projectid=tokenize(options.project))
+    if len(args)>0:
+        # add in some additional obsids
+        for arg in args:
+            results.append(metadata.fetch_observations(mintime=int(arg)-1,
+                                                       maxtime=int(arg)+1)))
+
     if results is None or len(results)==0:
         logger.error('No observations found')
         sys.exit(1)
@@ -686,7 +693,7 @@ def main():
     for item in results:            
         o=metadata.MWA_Observation_Summary(item)
         logger.info(str(o))
-
+        
 
     data=None
 

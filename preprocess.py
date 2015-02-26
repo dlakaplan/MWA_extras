@@ -684,7 +684,7 @@ def main():
         # add in some additional obsids
         for arg in args:
             results.append(metadata.fetch_observations(mintime=int(arg)-1,
-                                                       maxtime=int(arg)+1)))
+                                                       maxtime=int(arg)+1))
 
     if results is None or len(results)==0:
         logger.error('No observations found')

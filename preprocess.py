@@ -649,21 +649,14 @@ def main():
                                                                   socket.gethostname(),
                                                                   os.environ['USER']))
 
-    if options.starttime is None:
-        logger.error('Must supply starttime')
-        sys.exit(1)
-    if options.stoptime is None:
-        logger.error('Must supply stoptime')
-        sys.exit(1)
-    GPSstart=parse_time(options.starttime)
-    GPSstop=parse_time(options.stoptime)
-    if options.project is not None:
-        logger.info('Will preprocess observations from %s to %s with project=%s' % (GPSstart,
-                                                                                    GPSstop,
-                                                                                    options.project))
-    else:
-        logger.info('Will preprocess observations from %s to %s' % (GPSstart,
-                                                                    GPSstop))
+    if len(args)==0:
+        if options.starttime is None:
+            logger.error('Must supply starttime')
+            sys.exit(1)
+        if options.stoptime is None:
+            logger.error('Must supply stoptime')
+            sys.exit(1)
+    
     logger.info('Using mwapy version %s' % mwapy.__version__)
     result=subprocess.Popen(['cotter','-version'],
                             stdout=subprocess.PIPE).communicate()[0].strip()
@@ -671,6 +664,16 @@ def main():
     AOFlaggerversion=result.split('\n')[1].split('AOFlagger')[1].strip()
     logger.info('Using cotter version %s' % cotterversion)
     logger.info('Using AOFlagger version %s' % AOFlaggerversion)
+    if not (options.startime is None and options.stoptime is None):
+        GPSstart=parse_time(options.starttime)
+        GPSstop=parse_time(options.stoptime)
+        if options.project is not None:
+            logger.info('Will preprocess observations from %s to %s with project=%s' % (GPSstart,
+                                                                                        GPSstop,
+                                                                                        options.project))
+        else:
+            logger.info('Will preprocess observations from %s to %s' % (GPSstart,
+                                                                        GPSstop))
 
     results=[]
     if options.project is None:

@@ -35,7 +35,8 @@ def find_calibrator(obsid,
                     maxseparation=180*u.deg,
                     matchproject=True,
                     matchnight=True,
-                    priority='time'):
+                    priority='time',
+                    all=False):
 
     assert priority in ['time','distance']
 
@@ -93,7 +94,10 @@ def find_calibrator(obsid,
         goodlist=numpy.sort(goodlist, order='timediff')
     elif priority=='distance':
         goodlist=numpy.sort(goodlist, order='distance')
-    return goodlist[0]['obsid']
+    if not all:
+        return goodlist[0]['obsid']
+    else:
+        return list(goodlist['obsid'])
 
 ##################################################
 def main():
@@ -115,7 +119,10 @@ def main():
                  type='choice',
                  choices=['time','distance'],
                  help='Return the closest in time or distance? [default=%default]')
-    o.add_option('--verbose',dest='verbose',default=False,
+    o.add_option('--all',dest='all',default=False,
+                 action='store_true',
+                 help='Return all possible matches?')
+    o.add_option('-v','--verbose',dest='verbose',default=False,
                  action='store_true',
                  help='Give verbose output?')
 
@@ -144,11 +151,20 @@ def main():
                                maxseparation=maxseparation,
                                matchproject=matchproject,
                                matchnight=matchnight,
-                               priority=priority)
-        print obsid,result
-        if options.verbose:
-            o=metadata.MWA_Observation(int(result))
-            print o
+                               priority=priority,
+                               all=options.all)
+        if not options.all:
+            print obsid,result
+            if options.verbose:
+                o=metadata.MWA_Observation(int(result))
+                print o
+        else:
+            for m in result:
+                print obsid,m
+                if options.verbose:
+                    o=metadata.MWA_Observation(int(m))
+                    print o
+            
     sys.exit(0)
 ################################################################################                                                                                               
 

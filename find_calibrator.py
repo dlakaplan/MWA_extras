@@ -115,6 +115,9 @@ def main():
                  type='choice',
                  choices=['time','distance'],
                  help='Return the closest in time or distance? [default=%default]')
+    o.add_option('--verbose',dest='verbose',default=False,
+                 action='store_true',
+                 help='Give verbose output?')
 
     options, args = o.parse_args()
 
@@ -143,6 +146,9 @@ def main():
                                matchnight=matchnight,
                                priority=priority)
         print obsid,result
+        if options.verbose:
+            o=metadata.MWA_Observation(int(result))
+            print o
     sys.exit(0)
 ################################################################################                                                                                               
 

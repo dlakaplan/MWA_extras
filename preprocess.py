@@ -664,7 +664,8 @@ def main():
     AOFlaggerversion=result.split('\n')[1].split('AOFlagger')[1].strip()
     logger.info('Using cotter version %s' % cotterversion)
     logger.info('Using AOFlagger version %s' % AOFlaggerversion)
-    if not (options.startime is None and options.stoptime is None):
+    results=[]
+    if not (options.starttime is None and options.stoptime is None):
         GPSstart=parse_time(options.starttime)
         GPSstop=parse_time(options.stoptime)
         if options.project is not None:
@@ -675,19 +676,19 @@ def main():
             logger.info('Will preprocess observations from %s to %s' % (GPSstart,
                                                                         GPSstop))
 
-    results=[]
-    if options.project is None:
-        results=metadata.fetch_observations(mintime=GPSstart-1,
-                                            maxtime=GPSstop+1)
-    else:
-        results=metadata.fetch_observations(mintime=GPSstart-1,
-                                            maxtime=GPSstop+1,
-                                            projectid=tokenize(options.project))
+
+        if options.project is None:
+            results=metadata.fetch_observations(mintime=GPSstart-1,
+                                                maxtime=GPSstop+1)
+        else:
+            results=metadata.fetch_observations(mintime=GPSstart-1,
+                                                maxtime=GPSstop+1,
+                                                projectid=tokenize(options.project))
     if len(args)>0:
         # add in some additional obsids
         for arg in args:
-            results.append(metadata.fetch_observations(mintime=int(arg)-1,
-                                                       maxtime=int(arg)+1))
+            results+=metadata.fetch_observations(mintime=int(arg)-1,
+                                                 maxtime=int(arg)+1)
 
     if results is None or len(results)==0:
         logger.error('No observations found')

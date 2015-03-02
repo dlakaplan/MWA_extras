@@ -363,7 +363,12 @@ def get_free(path=None):
         command='ssh %s "df -k %s"' % (host,path)
         try:
             result=subprocess.check_output(command, shell=True)
-            return int(result.split('\n')[1].split()[3])*1024
+            if len(result.split('\n'))==3:
+                return int(result.split('\n')[1].split()[3])*1024
+            elif len(result.split('\n'))==4:
+                print result.split('\n')[2]
+                # an extra line-break
+                return int(result.split('\n')[2].split()[2])*1024
         except Exception, e:
             logger.error('Unable to check free space on %s:%s\n%s' % (host,path,e))
             return 0
@@ -383,6 +388,7 @@ class Observation():
     def __init__(self, obsid, basedir='./', clobber=False, 
                  cleanfits=False,
                  cleanms=False,
+                 checkfree=True,
                  copycommand='rsync -aruvP'):
         self.obsid=obsid
         self.basedir=basedir
@@ -398,6 +404,7 @@ class Observation():
         self.rawsize=None
         self.fitssize=None
         self.mssize=None
+        self.checkfree=checkfree
 
         self.outputdir=os.path.join(self.basedir,
                                     str(self.obsid),
@@ -431,7 +438,7 @@ class Observation():
 
     ##############################
     def download(self, numdownload=4):
-        if self.rawsize is not None and self.rawsize > 0 and self.rawsize > get_free(self.basedir):
+        if self.checkfree and (self.rawsize is not None and self.rawsize > 0 and self.rawsize > get_free(self.basedir)):
             logger.error('Data download will require %.1f MB, but only %.1f MB free space on %s' % (self.rawsize/1024./1024,
                                                                                                     get_free(self.basedir)/1024./1024,
                                                                                                     self.basedir))
@@ -463,7 +470,7 @@ class Observation():
         logger.info('Expect compression of %d in time and %d in frequency' % (compressionfactor_time,
                                                                               compressionfactor_freq))
         self.mssize=self.fitssize/compressionfactor_time/compressionfactor_freq
-        if self.mssize is not None and self.mssize > 0 and self.mssize > get_free(self.basedir):
+        if self.checkfree and (self.mssize is not None and self.mssize > 0 and self.mssize > get_free(self.basedir)):
             logger.error('Cotter will require %.1f MB, but only %.1f MB free space on %s' % (self.mssize/1024./1024,
                                                                                              get_free(self.basedir)/1024./1024,
                                                                                              self.basedir))
@@ -523,7 +530,7 @@ class Observation():
     ##############################
     def copy(self, destination):
         if destination is not None:
-            if self.mssize is not None and self.mssize > 0 and self.mssize > get_free(destination):
+            if self.checkfree and (self.mssize is not None and self.mssize > 0 and self.mssize > get_free(destination)):
                 logger.error('Copy will require %.1f MB, but only %.1f MB free space on %s' % (self.mssize/1024./1024,
                                                                                                get_free(destination)/1024./1024,
                                                                                                destination))
@@ -622,6 +629,9 @@ def main():
                       help='Command for (remote) copying [default=%default]')
     parser.add_option('--summaryformat',dest='summaryformat',default='ascii.commented_header',
                       help='Format for output summary table (from astropy.table) [default=%default]')
+    parser.add_option('--ignorespace',dest='ignorespace',default=False,
+                      action='store_true',
+                      help='Ignore free-space for file download, processing, and copying?')
     parser.add_option("-v", "--verbose", dest="loudness", default=0, action="count",
                       help="Each -v option produces more informational/debugging output")
     parser.add_option("-q", "--quiet", dest="quietness", default=0, action="count",
@@ -709,7 +719,8 @@ def main():
                                 copycommand=options.copycommand,
                                 clobber=options.clobber,
                                 cleanms=options.cleanms,
-                                cleanfits=options.cleanfits)
+                                cleanfits=options.cleanfits,
+                                checkfree=not options.ignorespace)
         downloadedfiles=observation.download(numdownload=options.downloads)
         if downloadedfiles is None:
             break

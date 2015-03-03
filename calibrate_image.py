@@ -413,67 +413,6 @@ def identify_calibrators(observation_data):
 
     return calibrators, notcalibrators, cal_observations
 
-######################################################################
-def autoprocess(self):
-    autoprocesscommand=['autoprocess',
-                        anokocatalog,
-                        '%s.ms' % obsid]
-    logger.info('Will run:\n\t%s' % ' '.join(autoprocesscommand))
-    p=subprocess.Popen(' '.join(autoprocesscommand),
-                       stderr=subprocess.PIPE,
-                       stdout=subprocess.PIPE,
-                       shell=True,
-                       close_fds=False)
-    output=[]
-    while True:
-        p.stdout.flush()
-        p.stderr.flush()
-        for l in p.stdout.readlines():
-            output.append(l)
-            logger.debug(l.rstrip())
-        for l in p.stderr.readlines():
-            logger.error(l.rstrip())
-        returncode=p.poll()
-        if returncode is not None:
-            break
-        time.sleep(1)
-    tasks=[]
-    for l in output:
-        if l.startswith('- '):
-            if not '- No' in l:
-                tasks.append(l[2:])
-    
-    if len(tasks)==0:
-        logger.info('No autoprocess required')
-        self.autoprocess='None'
-        return None
-    for i in xrange(len(tasks)):
-        logger.info('autoprocess will do: %s' % tasks[i])
-
-    autoprocesscommand=['autoprocess',
-                        '-go',
-                        anokocatalog,
-                        '%s.ms' % obsid]
-    logger.info('Will run:\n\t%s' % ' '.join(autoprocesscommand))
-    p=subprocess.Popen(' '.join(autoprocesscommand),
-                       stderr=subprocess.PIPE,
-                       stdout=subprocess.PIPE,
-                       shell=True,
-                       close_fds=False)
-    while True:
-        p.stdout.flush()
-        p.stderr.flush()
-        for l in p.stdout.readlines():
-            logger.debug(l.rstrip())
-        for l in p.stderr.readlines():
-            logger.error(l.rstrip())
-        returncode=p.poll()
-        if returncode is not None:
-            break
-        time.sleep(1)
-
-    self.autoprocess=';'.join(tasks)
-    return True
 
         
 ######################################################################
@@ -498,7 +437,7 @@ class Observation(metadata.MWA_Observation):
         self.inttime=0
         self.chanwidth=0
         self.otherkeys={}
-        self.autoprocess=False
+        self.autoprocesssources='None'
 
         if os.path.exists('%s.metafits' % self.obsid):
             self.metafits='%s.metafits' % self.obsid
@@ -590,6 +529,86 @@ class Observation(metadata.MWA_Observation):
             logger.error('%s.ms does not appear to be calibrated; no CORRECTED_DATA file is present' % self.obsid)
             return False
         return True
+
+
+    ##############################
+    def autoprocess(self,imagesize=2048,
+                    pixelscale=0.015,
+                ):
+        autoprocesscommand=['autoprocess',
+                            '-noselfcal',
+                            anokocatalog,
+                            '%s.ms' % self.obsid]
+        logger.info('Will run:\n\t%s' % ' '.join(autoprocesscommand))
+        p=subprocess.Popen(' '.join(autoprocesscommand),
+                           stderr=subprocess.PIPE,
+                           stdout=subprocess.PIPE,
+                           shell=True,
+        close_fds=False)
+        output=[]
+        while True:
+            p.stdout.flush()
+            p.stderr.flush()
+            for l in p.stdout.readlines():
+                output.append(l)
+                logger.debug(l.rstrip())
+            for l in p.stderr.readlines():
+                logger.error(l.rstrip())
+            returncode=p.poll()
+            if returncode is not None:
+                break
+            time.sleep(1)
+        tasks=[]
+        distances={}
+        peelsource=None
+        for l in output:
+            if 'distance' in l:
+                source=l.split()[0]
+                distance=float(l.split()[-2].replace('distance=',''))
+                distances[source]=distance
+            if l.startswith('- '):
+                if not '- No' in l:
+                    tasks.append(l[2:])
+                if 'Peel out source' in l:
+                    peelsource=l.split()[-1]
+    
+        if len(tasks)==0:
+            logger.info('No autoprocess required')
+            self.autoprocesssources='None'
+            return None
+        for i in xrange(len(tasks)):
+            logger.info('autoprocess will do: %s' % tasks[i])
+            if distances[peelsource] < (imagesize/2)*pixelscale:
+                logger.info('Actually, %s will be in the FOV so no need to peel' % peelsource)
+                self.autoprocesssources='None'
+                return None
+
+        autoprocesscommand=['autoprocess',
+                            '-noselfcal',
+                            '-go',
+                            anokocatalog,
+                            '%s.ms' % self.obsid]
+        logger.info('Will run:\n\t%s' % ' '.join(autoprocesscommand))
+        p=subprocess.Popen(' '.join(autoprocesscommand),
+                           stderr=subprocess.PIPE,
+                           stdout=subprocess.PIPE,
+                           shell=True,
+        close_fds=False)
+        while True:
+            p.stdout.flush()
+            p.stderr.flush()
+            for l in p.stdout.readlines():
+                logger.debug(l.rstrip())
+            for l in p.stderr.readlines():
+                logger.error(l.rstrip())
+            returncode=p.poll()
+            if returncode is not None:
+                break
+            time.sleep(1)
+        
+        self.autoprocesssources=peelsource
+        return True
+
 
     ##############################
     def image(self, 
@@ -694,6 +713,7 @@ class Observation(metadata.MWA_Observation):
             #                         'Calibrator observation')
             f[0].header['CALFILE']=(self.calibratorfile,
                                     'Calibrator file')
+            f[0].header['AUTOPEEL']=self.autoprocesssources
             try:
                 fm=fits.open(self.metafits)
             except Exception,e:
@@ -729,6 +749,7 @@ class Observation(metadata.MWA_Observation):
             # add other output to cleanup list
             for ext in ['dirty','model','residual']:
                 self.filestodelete.append(file.replace('-image','-%s' % ext))
+        self.filestodelete.append('%s-psf.fits' % self.obsid)
 
         return self.rawfiles
 
@@ -1054,8 +1075,9 @@ def main():
     times['applycal']=time.time()                       
 
     if options.autoprocess:
-        results=observations[observation_data[i]['obsid']].autoprocess()
-
+        results=observations[observation_data[i]['obsid']].autoprocess(imagesize=options.imagesize,
+                                                                       pixelscale=options.pixelscale)
+    sys.exit(0)
     times['autoprocess']=time.time()                       
     ##################################################
     # imaging

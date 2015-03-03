@@ -7,6 +7,7 @@ import time
 import subprocess
 from astropy.table import Table,Column
 import collections
+import find_calibrator
 
 ##############################
 # Custom formatter
@@ -615,6 +616,9 @@ def main():
                       help='Output time resolution (s) [default=%default]')
     parser.add_option('--freqres',dest='freqres',default=40,type='int',
                       help='Output frequency resolution (kHz) [default=%default]')
+    parser.add_option('--cal',dest='cal',default=False,
+                      action='store_true',
+                      help='Always include a calibrator observation?')
     parser.add_option('--cpus',dest='cottercpus',default=4,type='int',
                       help='Number of CPUs for cotter [default %default]')
     parser.add_option('--clobber',dest='clobber',default=False,action='store_true',
@@ -654,7 +658,7 @@ def main():
     logger.info('Log level set: messages that are %s or higher will be shown.' % loglevels[level][1])
 
 
-    logger.info('%s starting at %s UT on host %s with user %s' % (sys.argv[0],
+    logger.debug('%s starting at %s UT on host %s with user %s' % (sys.argv[0],
                                                                   datetime.datetime.now(),
                                                                   socket.gethostname(),
                                                                   os.environ['USER']))
@@ -667,14 +671,15 @@ def main():
             logger.error('Must supply stoptime')
             sys.exit(1)
     
-    logger.info('Using mwapy version %s' % mwapy.__version__)
+    logger.debug('Using mwapy version %s' % mwapy.__version__)
     result=subprocess.Popen(['cotter','-version'],
                             stdout=subprocess.PIPE).communicate()[0].strip()
     cotterversion=result.split('\n')[0].split('version')[1].strip()
     AOFlaggerversion=result.split('\n')[1].split('AOFlagger')[1].strip()
-    logger.info('Using cotter version %s' % cotterversion)
-    logger.info('Using AOFlagger version %s' % AOFlaggerversion)
+    logger.debug('Using cotter version %s' % cotterversion)
+    logger.debug('Using AOFlagger version %s' % AOFlaggerversion)
     results=[]
+    havecalibrator={}
     if not (options.starttime is None and options.stoptime is None):
         GPSstart=parse_time(options.starttime)
         GPSstop=parse_time(options.stoptime)
@@ -704,11 +709,37 @@ def main():
         logger.error('No observations found')
         sys.exit(1)
     logger.info(metadata.MWA_Observation_Summary.string_header())
+    # check if there is a calibrator present
+    observations=[]
     for item in results:            
         o=metadata.MWA_Observation_Summary(item)
         logger.info(str(o))
-        
+        observations.append(metadata.MWA_Observation(item[0]))
+        if havecalibrator.has_key(observations[-1].center_channel):
+            havecalibrator[observations[-1].center_channel] = havecalibrator[observations[-1].center_channel] or observations[-1].calibration
+        else:
+            havecalibrator[observations[-1].center_channel] = observations[-1].calibration
 
+    if not all(havecalibrator.values()):
+        for k in havecalibrator.keys():
+            if not havecalibrator[k]:
+                logger.warning('No calibrator observation found for center channel %d' % k)
+
+        if options.cal:
+            cals=[]
+            for i in xrange(len(results)):
+                channel=observations[i].center_channel
+                if not havecalibrator[channel]:
+                    cal=find_calibrator.find_calibrator(observations[i].observation_number,
+                                                        matchproject=True,
+                                                        priority='time',
+                                                        all=False)
+                    logger.info('Found calibrator observation %d for center channel %d' % (cal,channel))
+                    cals+=metadata.fetch_observations(mintime=cal-1,
+                                                      maxtime=cal+1)
+                    logger.info(str(metadata.MWA_Observation_Summary(cals[-1])))
+                    havecalibrator[channel]=True
+    results+=cals
     data=None
 
     logger.info('Processing observations...\n\n')

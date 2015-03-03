@@ -1,3 +1,18 @@
+"""
+Todo:
+
+-quality metrics:
+  - image rms
+  - # of sources detected
+-selfcal
+
+To debug:
+
+-table output of null strings
+-table output of filenames
+
+"""
+
 import logging,datetime,math,sys,socket,os,json,shutil,io
 from optparse import OptionParser,OptionGroup
 import threading
@@ -69,7 +84,7 @@ casapy='/usr/local/casapy'
 calmodelfile='/home/kaplan/MWA_extras/model_a-team.txt'
 anokocalibrate='~kaplan/mwa/anoko/mwa-reduce/build/calibrate'
 anokoapplycal='~kaplan/mwa/anoko/mwa-reduce/build/applysolutions'
-
+anokocatalog='~kaplan/mwa/anoko/mwa-reduce/catalogue/model-catalogue_new.txt'
 
 ##################################################
 def makemetafits(obsid):        
@@ -398,6 +413,68 @@ def identify_calibrators(observation_data):
 
     return calibrators, notcalibrators, cal_observations
 
+######################################################################
+def autoprocess(self):
+    autoprocesscommand=['autoprocess',
+                        anokocatalog,
+                        '%s.ms' % obsid]
+    logger.info('Will run:\n\t%s' % ' '.join(autoprocesscommand))
+    p=subprocess.Popen(' '.join(autoprocesscommand),
+                       stderr=subprocess.PIPE,
+                       stdout=subprocess.PIPE,
+                       shell=True,
+                       close_fds=False)
+    output=[]
+    while True:
+        p.stdout.flush()
+        p.stderr.flush()
+        for l in p.stdout.readlines():
+            output.append(l)
+            logger.debug(l.rstrip())
+        for l in p.stderr.readlines():
+            logger.error(l.rstrip())
+        returncode=p.poll()
+        if returncode is not None:
+            break
+        time.sleep(1)
+    tasks=[]
+    for l in output:
+        if l.startswith('- '):
+            if not '- No' in l:
+                tasks.append(l[2:])
+    
+    if len(tasks)==0:
+        logger.info('No autoprocess required')
+        self.autoprocess='None'
+        return None
+    for i in xrange(len(tasks)):
+        logger.info('autoprocess will do: %s' % tasks[i])
+
+    autoprocesscommand=['autoprocess',
+                        '-go',
+                        anokocatalog,
+                        '%s.ms' % obsid]
+    logger.info('Will run:\n\t%s' % ' '.join(autoprocesscommand))
+    p=subprocess.Popen(' '.join(autoprocesscommand),
+                       stderr=subprocess.PIPE,
+                       stdout=subprocess.PIPE,
+                       shell=True,
+                       close_fds=False)
+    while True:
+        p.stdout.flush()
+        p.stderr.flush()
+        for l in p.stdout.readlines():
+            logger.debug(l.rstrip())
+        for l in p.stderr.readlines():
+            logger.error(l.rstrip())
+        returncode=p.poll()
+        if returncode is not None:
+            break
+        time.sleep(1)
+
+    self.autoprocess=';'.join(tasks)
+    return True
+
         
 ######################################################################
 class Observation(metadata.MWA_Observation):
@@ -421,6 +498,7 @@ class Observation(metadata.MWA_Observation):
         self.inttime=0
         self.chanwidth=0
         self.otherkeys={}
+        self.autoprocess=False
 
         if os.path.exists('%s.metafits' % self.obsid):
             self.metafits='%s.metafits' % self.obsid
@@ -616,8 +694,6 @@ class Observation(metadata.MWA_Observation):
             #                         'Calibrator observation')
             f[0].header['CALFILE']=(self.calibratorfile,
                                     'Calibrator file')
-            f[0].header['INTTIME']=(self.inttime,'[s] Integration time')
-            f[0].header['FINECHAN']=(self.chanwidth,'[kHz] Fine channel width')
             try:
                 fm=fits.open(self.metafits)
             except Exception,e:
@@ -630,6 +706,23 @@ class Observation(metadata.MWA_Observation):
                                     fm[0].header.comments[k])
                 except:
                     pass
+
+            prev_inttime=f[0].header['INTTIME']
+            prev_finechan=f[0].header['FINECHAN']
+            f[0].header['INTTIME']=(self.inttime,'[s] Integration time')
+            f[0].header['FINECHAN']=(self.chanwidth,'[kHz] Fine channel width')
+            if prev_inttime != f[0].header['INTTIME']:
+                f[0].header['NSCANS']=int(f[0].header['NSCANS']*prev_inttime/f[0].header['INTTIME'])
+                logger.info('New integration time (%.1f s) differs from previous integration time (%.1f s): changing number of scans to %d' % (f[0].header['INTTIME'],
+                                                                                                                                               prev_inttime,
+                                                                                                                                               f[0].header['NSCANS']))
+            if prev_finechan != f[0].header['FINECHAN']:
+                f[0].header['NCHANS']=int(f[0].header['NCHANS']*prev_finechan/f[0].header['FINECHAN'])
+                logger.info('New final channel (%d kHz) differs from previous fine channel (%d kHz): changing number of channels to %d' % (f[0].header['FINECHAN'],
+                                                                                                                                           prev_finechan,
+                                                                                                                                           f[0].header['NCHANS']))
+                
+            
             f.verify('fix')
             f.flush()
 
@@ -773,6 +866,9 @@ def main():
     parser.add_option('--recalibrate',dest='recalibrate',default=False,
                       action='store_true',
                       help='Recalibrate existing output?')
+    parser.add_option('--autoprocess',dest='autoprocess',default=False,
+                      action='store_true',
+                      help='Run autoprocess?')
     parser.add_option('--size',dest='imagesize',default=2048,type='int',
                       help='Image size in pixels [default=%default]')
     parser.add_option('--scale',dest='pixelscale',default=0.015,type='float',
@@ -957,6 +1053,10 @@ def main():
 
     times['applycal']=time.time()                       
 
+    if options.autoprocess:
+        results=observations[observation_data[i]['obsid']].autoprocess()
+
+    times['autoprocess']=time.time()                       
     ##################################################
     # imaging
     ##################################################
@@ -1037,11 +1137,12 @@ def main():
     times['end']=time.time()
 
 
-    logger.info('Execution time: %d s (setup), %d s (make cal), %d s (apply cal), %d s (image) %d s (tidy) = %d s (total)' % (
+    logger.info('Execution time: %d s (setup), %d s (make cal), %d s (apply cal), %d s (autoprocess), %d s (image) %d s (tidy) = %d s (total)' % (
         times['init']-times['start'],
         times['makecal']-times['init'],
         times['applycal']-times['makecal'],
-        times['image']-times['applycal'],        
+        times['autoprocess']-times['applycal'],        
+        times['image']-times['autoprocess'],        
         times['end']-times['image'],
         times['end']-times['start']))
 

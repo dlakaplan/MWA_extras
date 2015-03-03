@@ -403,11 +403,11 @@ def identify_calibrators(observation_data):
 class Observation(metadata.MWA_Observation):
 
     ##############################
-    def __init__(self, obsid, outputdir='./', clobber=False, clean=False):
+    def __init__(self, obsid, outputdir='./', clobber=False, delete=False):
         self.obsid=obsid
         self.basedir=os.path.abspath(outputdir)
         self.clobber=clobber
-        self.clean=clean
+        self.delete=delete
 
         self.metafits=None
         self.rawfiles=[]
@@ -432,12 +432,12 @@ class Observation(metadata.MWA_Observation):
         if not os.path.exists('%s.ms' % self.obsid):
             logger.error('MS file %s.ms does not exist' % self.obsid)
         self.chanwidth, self.inttime, self.otherkeys=get_msinfo('%s.ms' % self.obsid)
-        self.filestoclean=[]
+        self.filestodelete=[]
 
     ##############################
     def __del__(self):
-        if self.clean:
-            for file in self.filestoclean:
+        if self.delete:
+            for file in self.filestodelete:
                 if os.path.exists(file):
                     try:
                         if os.path.isdir(file):
@@ -464,7 +464,7 @@ class Observation(metadata.MWA_Observation):
             self.calmodelfile=write_calmodelfile(calibrator_name)
             if self.calmodelfile is None:
                 return None
-            self.filestoclean.append(self.calmodelfile)
+            self.filestodelete.append(self.calmodelfile)
         self.calibratorfile='%s.cal' % self.obsid
         if os.path.exists(self.calibratorfile):
             if self.clobber:
@@ -635,7 +635,7 @@ class Observation(metadata.MWA_Observation):
 
             # add other output to cleanup list
             for ext in ['dirty','model','residual']:
-                self.filestoclean.append(file.replace('-image','-%s' % ext))
+                self.filestodelete.append(file.replace('-image','-%s' % ext))
 
         return self.rawfiles
 
@@ -680,7 +680,7 @@ class Observation(metadata.MWA_Observation):
             if not os.path.exists(expected_beamoutput[j]):
                 logger.error('Expected beam output %s does not exist' % expected_beamoutput[j])
                 return None
-            self.filestoclean.append(expected_beamoutput[j])
+            self.filestodelete.append(expected_beamoutput[j])
         return expected_beamoutput
 
     ##############################
@@ -749,7 +749,7 @@ class Observation(metadata.MWA_Observation):
         if not self.fullpolarization:
             for pol in ['Q','U','V']:
                 if os.path.exists('%s-%s.fits' % (self.obsid,pol)):
-                    self.filestoclean.append('%s-%s.fits' % (self.obsid,pol))
+                    self.filestodelete.append('%s-%s.fits' % (self.obsid,pol))
 
 
             
@@ -815,12 +815,12 @@ def main():
     parser.add_option('--noclobber',dest='clobber',default=False,
                       action='store_false',
                       help='Do not clobber existing output?')
-    parser.add_option('--clean',dest='clean',default=False,
+    parser.add_option('--delete',dest='delete',default=False,
                       action='store_true',
-                      help='Clean unneeded output?')
-    parser.add_option('--noclean',dest='clean',default=False,
+                      help='Delete unneeded output?')
+    parser.add_option('--nodelete',dest='delete',default=False,
                       action='store_false',
-                      help='Do not clean unneeded output?')
+                      help='Do not delete unneeded output?')
     parser.add_option('--cpus',dest='ncpus',default=32,
                       type='int',
                       help='Number of CPUs to be used [default=%default]')
@@ -899,7 +899,7 @@ def main():
         file=files[i]
         obsid=int(file.split('.')[0])
         observations[obsid]=Observation(obsid, clobber=options.clobber,
-                                        clean=options.clean)
+                                        delete=options.delete)
         if observations[obsid].inttime==0:
             sys.exit(1)        
         observation_data[i]['obsid']=observations[obsid].observation_number

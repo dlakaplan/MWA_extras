@@ -33,6 +33,7 @@ def issamenight(obsid1, obsid2):
 def find_calibrator(obsid, 
                     maxtimediff=TimeDelta(1*u.d),
                     maxseparation=180*u.deg,
+                    sourcename=None,
                     matchproject=True,
                     matchnight=True,
                     priority='time',
@@ -53,19 +54,31 @@ def find_calibrator(obsid,
         logger.error('Cannot fetch info for observation %d:\n\t%s' % (obsid, e))
         return None
 
-    basepointing=SkyCoord(baseobs.ra_phase_center, baseobs.dec_phase_center, unit='deg', frame='icrs')
-    basetime=Time(obsid, format='gps',scale='utc')
+    try:
+        basepointing=SkyCoord(baseobs.ra_phase_center, baseobs.dec_phase_center, 
+                              unit='deg', frame='icrs')
+    except:
+        basepointing=SkyCoord(baseobs.RA, baseobs.Dec,
+                          unit='deg', frame='icrs')
 
+    basetime=Time(obsid, format='gps',scale='utc')
+    
+    if sourcename is not None and len(sourcename)>0:
+        sourcename='%' + sourcename + '%'
+    else:
+        sourcename='%'
     if matchproject:
         results=metadata.fetch_observations(mintime=int(starttime.gps)-1,
                                             maxtime=int(stoptime.gps)-1,
                                             projectid=baseobs.projectid,
                                             calibration=1,
+                                            obsname=sourcename,
                                             cenchan=baseobs.center_channel)
     else:
         results=metadata.fetch_observations(mintime=int(starttime.gps)-1,
                                             maxtime=int(stoptime.gps)-1,
                                             calibration=1,
+                                            obsname=sourcename,
                                             cenchan=baseobs.center_channel)
     if len(results)==0:
         return None
@@ -115,6 +128,8 @@ def main():
     o.add_option('--matchnight',dest='matchnight',default=False,
                  action='store_true',
                  help='Match night to original ObsID?')
+    o.add_option('--source',dest='source',default=None,
+                 help='Calibrator source name [default=None]')
     o.add_option('--priority',dest='priority',default='time',
                  type='choice',
                  choices=['time','distance'],
@@ -151,6 +166,7 @@ def main():
                                maxseparation=maxseparation,
                                matchproject=matchproject,
                                matchnight=matchnight,
+                               sourcename=options.source,
                                priority=priority,
                                all=options.all)
         if not options.all:

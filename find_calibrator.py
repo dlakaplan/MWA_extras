@@ -34,6 +34,7 @@ def find_calibrator(obsid,
                     maxtimediff=TimeDelta(1*u.d),
                     maxseparation=180*u.deg,
                     sourcename=None,
+                    notsourcename=['FDS'],
                     matchproject=True,
                     matchnight=True,
                     priority='time',
@@ -43,6 +44,7 @@ def find_calibrator(obsid,
                     maxtimediff=TimeDelta(1*u.d),
                     maxseparation=180*u.deg,
                     sourcename=None,
+                    notsourcename=['FDS'],
                     matchproject=True,
                     matchnight=True,
                     priority='time',
@@ -99,7 +101,8 @@ def find_calibrator(obsid,
                          dtype=[('obsid','i4'),
                                 ('distance','f4'),
                                 ('timediff','f4'),
-                                ('good',numpy.bool)])
+                                ('good',numpy.bool),
+                                ('obsname','a20')])
 
     for i in xrange(len(results)):
         result=results[i]
@@ -110,19 +113,24 @@ def find_calibrator(obsid,
         good=good and separation < maxseparation
         good=good and Time(obs.obsid,format='gps',scale='utc')-basetime<maxtimediff
         good=good and (not matchnight or issamenight(baseobs.observation_number, obs.obsid))
+        if len(notsourcename)>0:
+            for s in notsourcename:
+                good=good and not (s in obs.obsname)
         goodlist[i]['obsid']=obs.obsid
         goodlist[i]['good']=good
         goodlist[i]['distance']=separation.deg
         goodlist[i]['timediff']=numpy.abs((Time(obs.obsid,format='gps',scale='utc')-basetime).jd)
-        
+        goodlist[i]['obsname']=obs.obsname
+
+    goodlist=goodlist[goodlist['good']]
     if priority=='time':
         goodlist=numpy.sort(goodlist, order='timediff')
     elif priority=='distance':
         goodlist=numpy.sort(goodlist, order='distance')
     if not all:
-        return (goodlist[0]['obsid'],goodlist[0]['timediff'],goodlist[0]['distance'])
+        return (goodlist[0]['obsid'],goodlist[0]['timediff'],goodlist[0]['distance'],goodlist[0]['obsname'])
     else:
-        return (list(goodlist['obsid']),list(goodlist['timediff']),list(goodlist['distance']))
+        return (list(goodlist['obsid']),list(goodlist['timediff']),list(goodlist['distance']),list(goodlist['obsname']))
 
 ##################################################
 def main():
@@ -142,6 +150,8 @@ def main():
                  help='Match night to original ObsID?')
     o.add_option('--source',dest='source',default=None,
                  help='Calibrator source name [default=None]')
+    o.add_option('--notsource',dest='notsource',default='FDS',
+                 help='Comma-separated list of source names to exclude [default=%default]')
     o.add_option('--priority',dest='priority',default='time',
                  type='choice',
                  choices=['time','distance'],
@@ -179,21 +189,23 @@ def main():
                                matchproject=matchproject,
                                matchnight=matchnight,
                                sourcename=options.source,
+                               notsourcename=options.notsource.split(','),
                                priority=priority,
                                all=options.all)
         if result is None:
             print "None"
         elif not options.all:
-            print '# Obsid\t\tCalObsid\tTimediff(day)\tDistance(deg)'
-            print '%s\t%s\t%.3f\t\t%.1f' % (obsid,result[0],result[1],result[2])
+            print '# Obsid\t\tCalObsid\tTimediff(day)\tDistance(deg)\tSource'
+            print '%s\t%s\t%.3f\t\t%.1f\t\t%s' % (obsid,result[0],result[1],result[2],result[3])
             if options.verbose:
                 o=metadata.MWA_Observation(int(result[0]))
                 print o
         else:
-            print '# Obsid\t\tCalObsid\tTimediff(day)\tDistance(deg)'
+            print '# Obsid\t\tCalObsid\tTimediff(day)\tDistance(deg)\tSource'
             for i in xrange(len(result[0])):
-                print '%s\t%s\t%.3f\t\t%.1f' % (obsid,result[0][i],
-                                                result[1][i],result[2][i])
+                print '%s\t%s\t%.3f\t\t%.1f\t\t%s' % (obsid,result[0][i],
+                                                      result[1][i],result[2][i],
+                                                      result[3][i])
                 if options.verbose:
                     o=metadata.MWA_Observation(int(result[0][i]))
                     print o

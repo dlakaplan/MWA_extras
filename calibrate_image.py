@@ -88,6 +88,11 @@ anokocatalog='~kaplan/mwa/anoko/mwa-reduce/catalogue/model-catalogue_new.txt'
 
 ##################################################
 def makemetafits(obsid):        
+    """
+    makemetafits(obsid)
+    returns metafits name on success
+    or None on failure
+    """
     m=metadata.instrument_configuration(int(obsid))
     h=m.make_metafits()
     metafits='%s.metafits' % obsid
@@ -103,7 +108,12 @@ def makemetafits(obsid):
 
 ##################################################
 def get_msinfo(msfile):
-
+    """
+    chanwidth, inttime, otherkeys=get_msinfo(msfile)
+    chanwidth is channel width in kHz
+    inttime is integration time in s
+    otherkeys is a dictionary containing other header keywords
+    """
     if not _CASA:
         logger.error('requires drivecasa')
         return None
@@ -148,6 +158,10 @@ def get_msinfo(msfile):
     
 ##################################################
 def check_calibrated(msfile):
+    """
+    check_calibrated(msfile)
+    checks for presence of CORRECTED_DATA column in a ms file
+    """
     if not _CASA:
         logger.error('requires drivecasa')
         return None
@@ -179,6 +193,10 @@ def check_calibrated(msfile):
     return None
 ##################################################
 def getcasaversion():
+    """
+    getcasaversion()
+    returns CASA version string
+    """
     if not _CASA:
         logger.error('requires drivecasa')
         return None
@@ -204,6 +222,11 @@ def getcasaversion():
 
 ##################################################
 def calibrate_casa(obsid):
+    """
+    calibrate_casa(obsid)
+    returns name of calibration (gain) file on success
+    returns None on failure
+    """
     if not _CASA:
         logger.error("CASA operation not possible")
         return None
@@ -244,6 +267,10 @@ def calibrate_casa(obsid):
 
 ##################################################
 def applycal_casa(obsid, calfile):
+    """
+    applycal_casa(obsid, calfile)
+    returns True on success, None on failure
+    """
     if not _CASA:
         logger.error("CASA operation not possible")
         return None
@@ -269,6 +296,12 @@ def applycal_casa(obsid, calfile):
 
 ##################################################
 def extract_calmodel(filename, sourcename):
+    """
+    extract_calmodel(filename, sourcename)
+    extracts just the data for given <sourcename> from the
+    master model file <filename>
+    returns the corresponding lines or None on failure
+    """
     logger.debug('Extracting calibration model for %s from file %s' % (sourcename,
                                                                        filename))
     try:
@@ -301,6 +334,12 @@ def extract_calmodel(filename, sourcename):
 
 ##################################################
 def write_calmodelfile(calibrator_name):
+    """
+    write_calmodelfile(calibrator_name)
+    extracts the relevant info from the master calibrator model file
+    and writes it to a single-source file
+    returns the name of that file on success, or None on failure
+    """
     
     # get a model file
     calibrator_modeldata=extract_calmodel(calmodelfile,
@@ -322,7 +361,12 @@ def write_calmodelfile(calibrator_name):
     return outputcalmodelfile
             
 ##################################################
-def calibrate_anoko(obsid,outputcalmodelfile):
+def calibrate_anoko(obsid,outputcalmodelfile, ncpus=32):
+    """
+    calibrate_anoko(obsid,outputcalmodelfile, ncpus=32)
+    returns name of calibration (gain) file on success
+    """
+
     calfile='%s.cal' % obsid
     calibratecommand=[anokocalibrate,
                       '-j',
@@ -353,6 +397,10 @@ def calibrate_anoko(obsid,outputcalmodelfile):
 
 ##################################################
 def applycal_anoko(obsid, calfile):
+    """
+    applycal_anoko(obsid, calfile):
+    returns True on success
+    """
     applycalcommand=[anokoapplycal,
                      '-copy',
                      '%s.ms' % obsid,
@@ -419,25 +467,45 @@ def identify_calibrators(observation_data):
 class Observation(metadata.MWA_Observation):
 
     ##############################
-    def __init__(self, obsid, outputdir='./', clobber=False, delete=False):
+    def __init__(self, obsid, 
+                 caltype='anoko',
+                 outputdir='./', ncpus=32, 
+                 memfraction=50,
+                 clobber=False, delete=False):
+        """
+        Observation(obsid, 
+        caltype='anoko',
+        outputdir='./', ncpus=32, 
+        memfraction=50,
+        clobber=False, delete=False)
+        """
+        assert caltype in ['anoko','casa']
+
         self.obsid=obsid
         self.basedir=os.path.abspath(outputdir)
         self.clobber=clobber
         self.delete=delete
+        self.ncpus=ncpus
+        self.memfraction=memfraction
 
         self.metafits=None
         self.rawfiles=[]
         self.beamfiles=[]
         self.corrfiles=[]
 
+        # this is the obsid of the calibrator to be used                
         self.calibrator=None
+        # this is the model file used for anoko calibration
         self.calmodelfile=None
-        self.caltype=None
+        # this is the type of calibration used (anoko, casa)
+        self.caltype=caltype
+        # this is the actual calibration (gain) file
         self.calibratorfile=None
         self.inttime=0
         self.chanwidth=0
         self.otherkeys={}
         self.autoprocesssources='None'
+        self.centerchanged=False
 
         if os.path.exists('%s.metafits' % self.obsid):
             self.metafits='%s.metafits' % self.obsid
@@ -453,9 +521,14 @@ class Observation(metadata.MWA_Observation):
 
     ##############################
     def __del__(self):
+        """
+        This desctructor deletes temporary files
+        if self.delete is True
+        """
         if self.delete:
             for file in self.filestodelete:
                 if os.path.exists(file):
+                    logger.debug('Deleting %s' % file)
                     try:
                         if os.path.isdir(file):
                             shutil.rmtree(file)
@@ -467,16 +540,28 @@ class Observation(metadata.MWA_Observation):
 
     ##############################
     def __getattr__(self, name):
+        """
+        overloads getattr to lookup info in the self.observation
+        class if needed
+        """
         if self.__dict__.has_key(name):
             return self.__dict__[name]
         else:
             return self.observation.__dict__[name]
 
     ##############################
-    def make_cal(self, caltype):
+    def make_cal(self):
+        """
+        make_cal(self)
+        make a calibration solution
+        returns the name of the calibration solution on success
+        or None on failure
+        also sets self.calmodelfile to that file
+        """
+        assert self.caltype in ['anoko','casa']
         if not self.calibration:
             return None
-        if caltype=='anoko':
+        if self.caltype=='anoko':
             calibrator_name=self.calibratorsource
             self.calmodelfile=write_calmodelfile(calibrator_name)
             if self.calmodelfile is None:
@@ -493,21 +578,27 @@ class Observation(metadata.MWA_Observation):
             else:
                 logger.warning('Calibration file %s exists and clobber=False; continuing...' % self.calibratorfile)
                 return self.calibratorfile
-        if caltype=='anoko':
+        if self.caltype=='anoko':
             result=calibrate_anoko(self.obsid,
-                                   self.calmodelfile)
-        elif caltype=='casa':        
+                                   self.calmodelfile,
+                                   ncpus=self.ncpus)
+        elif self.caltype=='casa':        
             result=calibrate_casa(self.obsid)
         if result is not None:
             self.calibratorfile=result
-            self.caltype=caltype
-            logger.info('Wrote %s' % calibratorfile)
+            logger.info('Wrote %s' % self.calibratorfile)
             return self.calibratorfile
         else:
             return None
 
     ##############################
-    def calibrate(self, caltype='anoko', recalibrate=True):
+    def calibrate(self, recalibrate=True):
+        """
+        calibrate(self, recalibrate=True)
+        apply a calibration solution
+        return True on success, False on error
+        """
+        assert self.caltype in ['anoko','casa']
         if not os.path.exists(self.calibratorfile):
             logger.error('Cannot find calibration file %s for observation %s' % (self.calibratorfile,
                                                                                  self.obsid))
@@ -535,6 +626,16 @@ class Observation(metadata.MWA_Observation):
     def autoprocess(self,imagesize=2048,
                     pixelscale=0.015,
                 ):
+        """
+        autoprocess(self,imagesize=2048,
+                    pixelscale=0.015,
+                ):
+        run autoprocess, peeling only
+        if the source to be peeled is within the primary FOV 
+        (as determined by pixelscale and imagesize) then will not be peeled
+        returns True on success
+        also sets self.autoprocesssources to the source peeled
+        """
         autoprocesscommand=['autoprocess',
                             '-noselfcal',
                             anokocatalog,
@@ -611,7 +712,41 @@ class Observation(metadata.MWA_Observation):
 
 
     ##############################
+    def chgcentre(self):
+        """
+        chgcentre()
+        returns True on success
+        also sets self.centerchanged to True if run
+        """
+        chgcentrecommand=['chgcentre',
+                          '-minw',
+                          '-shiftback',
+                          '%s.ms' % self.obsid]
+        logger.info('Will run:\n\t%s' % ' '.join(chgcentrecommand))
+        p=subprocess.Popen(' '.join(chgcentrecommand),
+                           stderr=subprocess.PIPE,
+                           stdout=subprocess.PIPE,
+                           shell=True,
+        close_fds=False)
+        while True:
+            p.stdout.flush()
+            p.stderr.flush()
+            for l in p.stdout.readlines():
+                logger.debug(l.rstrip())
+            for l in p.stderr.readlines():
+                logger.error(l.rstrip())
+            returncode=p.poll()
+            if returncode is not None:
+                break
+            time.sleep(1)
+        
+        self.centerchanged=True
+        return True
+
+
+    ##############################
     def image(self, 
+              suffix=None,
               clean_weight='uniform',
               imagesize=2048,
               pixelscale=0.015,
@@ -622,9 +757,41 @@ class Observation(metadata.MWA_Observation):
               clean_maxuv=0,
               fullpolarization=True,
               wsclean_arguments='',
-              ncpus=32,
-              memfraction=50):
+              updateheader=True):
+        """
+        image(suffix=None,
+              clean_weight='uniform',
+              imagesize=2048,
+              pixelscale=0.015,
+              clean_iterations=100,
+              clean_gain=0.1,
+              clean_mgain=1.0,
+              clean_minuv=0,
+              clean_maxuv=0,
+              fullpolarization=True,
+              wsclean_arguments='',
+              updateheader=True)
+        images with wsclean
+        creates output like <obsid>_<suffix>-<pol>-image.fits
+        returns the list of files on success, None on failure
+        
+        other files (model, etc) are put into list of files to delete
+        sets:
+        self.clean_weight
+        self.imagesize
+        self.pixelscale
+        self.clean_iterations
+        self.clean_gain
+        self.clean_mgain
+        self.clean_minuv
+        self.clean_maxuv
+        self.fullpolarization
+        self.wsclean_arguments
 
+        will update the header of the output if desired to include info from 
+        this task and from metafits
+
+        """
         self.clean_weight=clean_weight
         self.imagesize=imagesize
         self.pixelscale=pixelscale
@@ -636,13 +803,17 @@ class Observation(metadata.MWA_Observation):
         self.fullpolarization=fullpolarization
         self.wsclean_arguments=wsclean_arguments
 
+        if suffix is not None:
+            name='%s_%s' % (self.obsid,suffix)
+        else:
+            name=str(self.obsid)
         wscleancommand=['wsclean',
                         '-j',
-                        str(ncpus),
+                        str(self.ncpus),
                         '-mem',
-                        str(memfraction),
+                        str(self.memfraction),
                         '-name',
-                        str(self.obsid),
+                        name,
                         '-weight',
                         self.clean_weight,
                         '-size',
@@ -667,12 +838,12 @@ class Observation(metadata.MWA_Observation):
             wscleancommand.append('xx,xy,yx,yy')
             wscleancommand.append('-joinpolarizations')
             for pol in ['XX','YY','XY','XYi']:
-                expected_output.append('%s-%s-image.fits' % (self.obsid,pol))
+                expected_output.append('%s-%s-image.fits' % (name,pol))
         else:
             wscleancommand.append('-pol')
             wscleancommand.append('xx,yy')
             for pol in ['XX','YY']:
-                expected_output.append('%s-%s-image.fits' % (self.obsid,pol))
+                expected_output.append('%s-%s-image.fits' % (name,pol))
         if len(self.wsclean_arguments)>0:
             wscleancommand+=self.wsclean_arguments.split()
         wscleancommand.append('%s.ms' % self.obsid)
@@ -700,20 +871,27 @@ class Observation(metadata.MWA_Observation):
                 logger.error('Expected wsclean output %s does not exist' % file)
                 return None
             logger.info('Created wsclean output %s' % file)
+            # add other output to cleanup list
+            for ext in ['dirty','model','residual']:
+                self.filestodelete.append(file.replace('-image','-%s' % ext))
+
             self.rawfiles.append(file)
 
+            if not updateheader:
+                continue
             try:
                 f=fits.open(file,'update')
             except Exception,e:
                 logger.open('Unable to open image output %s for updating:\n\t%s' % (file,e))
                 return None
 
-            f[0].header['CALTYPE']=(self.calibration,'Calibration type')
+            f[0].header['CALTYPE']=(self.caltype,'Calibration type')
             #f[0].header['CALIBRAT']=(observation_data[i]['calibrator'],
             #                         'Calibrator observation')
             f[0].header['CALFILE']=(self.calibratorfile,
                                     'Calibrator file')
             f[0].header['AUTOPEEL']=self.autoprocesssources
+            f[0].header['CHGCENTR']=self.centerchanged
             try:
                 fm=fits.open(self.metafits)
             except Exception,e:
@@ -746,22 +924,31 @@ class Observation(metadata.MWA_Observation):
             f.verify('fix')
             f.flush()
 
-            # add other output to cleanup list
-            for ext in ['dirty','model','residual']:
-                self.filestodelete.append(file.replace('-image','-%s' % ext))
-        self.filestodelete.append('%s-psf.fits' % self.obsid)
+        self.filestodelete.append('%s-psf.fits' % name)
 
         return self.rawfiles
 
     ##############################
-    def makepb(self, beammodel='2014i'):
+    def makepb(self, suffix=None, beammodel='2014i'):
+        """
+        makepb(self, suffix=None, beammodel='2014i')
+        make primary beam using anoko/beam
+        
+        creates files like beam-<obsid>_<suffix>-<pol>.fits
+        
+        returns list of new beam files on success, None on failure
+        """
         assert beammodel in ['2013','2014','2014i']
 
+        if suffix is not None:
+            name='%s_%s' % (self.obsid,suffix)
+        else:
+            name=str(self.obsid)
         self.beammodel=beammodel
         beamcommand=['beam',
                      '-' + beammodel,
                      '-name',
-                     'beam-%s' % self.obsid,
+                     'beam-%s' % name,
                      '-proto',
                      self.rawfiles[0],
                      '-ms',
@@ -769,7 +956,7 @@ class Observation(metadata.MWA_Observation):
         
         expected_beamoutput=[]
         for pol in ['xxr','xxi','yyr','yyi','xyr','xyi','yxr','yxi']:
-            expected_beamoutput.append('beam-%s-%s.fits' % (self.obsid,
+            expected_beamoutput.append('beam-%s-%s.fits' % (name,
                                                             pol))
 
         logger.info('Will run:\n\t%s' % ' '.join(beamcommand))
@@ -794,24 +981,56 @@ class Observation(metadata.MWA_Observation):
             if not os.path.exists(expected_beamoutput[j]):
                 logger.error('Expected beam output %s does not exist' % expected_beamoutput[j])
                 return None
+            
             self.filestodelete.append(expected_beamoutput[j])
+            file=expected_beamoutput[j]
+            try:
+                f=fits.open(file,'update')
+            except Exception,e:
+                logger.open('Unable to open PB output %s for updating:\n\t%s' % (file,e))
+                return None            
+            f[0].header['PBMODEL']=(self.beammodel,'Primary beam model')
+            f.verify('fix')
+            f.flush()
         return expected_beamoutput
 
     ##############################
-    def pbcorrect(self):
-        pbcorrectcommand=['pbcorrect',
-                          str(self.obsid),
-                          'image.fits',
-                          'beam-%s' % str(self.obsid),
-                          str(self.obsid)]
+    def pbcorrect(self, suffix=None, model=False, uncorrect=False):
+        """
+        pbcorrect(self, suffix=None, model=False, uncorrect=False)
+        primary beam correct using anoko/pbcorrect
+
+        creates output like <obsid>_<suffix>-<pol>.fits
+        if doing fullpol, will make all Stokes
+        otherwise Q,U,V get put into list of files to delete
+        
+        returns list of corrected images on success, None on failure
+        """
+        if suffix is not None:
+            name='%s_%s' % (self.obsid,suffix)
+        else:
+            name=str(self.obsid)
+
+        if not model:
+            imagetype='image.fits'
+        else:
+            imagetype='model.fits'
+
+        pbcorrectcommand=['pbcorrect']
+        if uncorrect:
+            pbcorrectcommand.append('-uncorrect')
+        pbcorrectcommand+=[name,
+                           imagetype,
+                           'beam-%s' % name,
+                           name]
         expected_pbcorroutput=[]
         if self.fullpolarization:
             for pol in ['I','Q','U','V']:
-                expected_pbcorroutput.append('%s-%s.fits' % (self.obsid,
+                expected_pbcorroutput.append('%s-%s.fits' % (name,
                                                              pol))
         else:
             for pol in ['I']:
-                expected_pbcorroutput.append('%s-%s.fits' % (self.obsid,
+                expected_pbcorroutput.append('%s-%s.fits' % (name,
                                                              pol))
 
         logger.info('Will run:\n\t%s' % ' '.join(pbcorrectcommand))
@@ -862,8 +1081,8 @@ class Observation(metadata.MWA_Observation):
 
         if not self.fullpolarization:
             for pol in ['Q','U','V']:
-                if os.path.exists('%s-%s.fits' % (self.obsid,pol)):
-                    self.filestodelete.append('%s-%s.fits' % (self.obsid,pol))
+                if os.path.exists('%s-%s.fits' % (name,pol)):
+                    self.filestodelete.append('%s-%s.fits' % (name,pol))
 
 
             
@@ -890,6 +1109,12 @@ def main():
     parser.add_option('--autoprocess',dest='autoprocess',default=False,
                       action='store_true',
                       help='Run autoprocess?')
+    parser.add_option('--chgcentre',dest='chgcentre',default=False,
+                      action='store_true',
+                      help='Run chgcentre?')
+    parser.add_option('--selfcal',dest='selfcal',default=False,
+                      action='store_true',
+                      help='Run selfcal?')
     parser.add_option('--size',dest='imagesize',default=2048,type='int',
                       help='Image size in pixels [default=%default]')
     parser.add_option('--scale',dest='pixelscale',default=0.015,type='float',
@@ -965,7 +1190,7 @@ def main():
         logger.error('Must supply >=1 ms files to process')
         sys.exit(1)
 
-    if not os.environ.has_key('MWA_CODE_BASE'):
+    if options.caltype=='casa' and not os.environ.has_key('MWA_CODE_BASE'):
         logger.error('Environment variable $MWA_CODE_BASE is not set; please set and re-run')
         sys.exit(1)
 
@@ -991,6 +1216,7 @@ def main():
                                         ('iscalibrator',numpy.bool),
                                         ('channel','i4'),
                                         ('calibrator','i4'),
+                                        ('caltype','a10'),
                                         ('calibratorsource','a20'),
                                         ('calibratorfile','a30'),
                                         ('clean_iterations','i4'),
@@ -1015,7 +1241,11 @@ def main():
     for i in xrange(len(files)):
         file=files[i]
         obsid=int(file.split('.')[0])
-        observations[obsid]=Observation(obsid, clobber=options.clobber,
+        observations[obsid]=Observation(obsid, 
+                                        caltype=options.caltype,
+                                        clobber=options.clobber,
+                                        ncpus=options.ncpus,
+                                        memfraction=options.memfraction,
                                         delete=options.delete)
         if observations[obsid].inttime==0:
             sys.exit(1)        
@@ -1049,11 +1279,11 @@ def main():
     # generate calibration solutions
     ##################################################
     for i in calibrators:
-        result=observations[observation_data[i]['obsid']].make_cal(options.caltype)
+        result=observations[observation_data[i]['obsid']].make_cal()
         if result is None:
             sys.exit(1)
         observation_data[i]['calibratorfile']=result
-
+        observation_data[i]['caltype']=observations[observation_data[i]['obsid']].caltype
     times['makecal']=time.time()        
 
     ##################################################
@@ -1066,24 +1296,91 @@ def main():
             cal_touse=i
         observations[observation_data[i]['obsid']].calibratorfile=observation_data[cal_touse]['calibratorfile']
         
-        result=observations[observation_data[i]['obsid']].calibrate(options.caltype,
-                                                                    options.recalibrate)
+        result=observations[observation_data[i]['obsid']].calibrate(options.recalibrate)
         if result is False or result is None:
             sys.exit(1)
         observation_data[i]['calibratorfile']=observations[observation_data[i]['obsid']].calibratorfile
 
     times['applycal']=time.time()                       
 
-    if options.autoprocess:
-        results=observations[observation_data[i]['obsid']].autoprocess(imagesize=options.imagesize,
+    ##################################################
+    # autoprocess
+    ##################################################
+    for i in xrange(len(observation_data)):
+        if options.autoprocess:
+            if observations[observation_data[i]['obsid']].calibration and options.nocal:
+                logger.debug('Skipping autoprocess of calibrator observation %s' % observation_data[i]['obsid'])
+                continue
+            results=observations[observation_data[i]['obsid']].autoprocess(imagesize=options.imagesize,
                                                                        pixelscale=options.pixelscale)
-    sys.exit(0)
     times['autoprocess']=time.time()                       
+
+    ##################################################
+    # chgcentre
+    ##################################################
+    for i in xrange(len(observation_data)):
+        if options.chgcentre:
+            if observations[observation_data[i]['obsid']].calibration and options.nocal:
+                logger.debug('Skipping chgcentre of calibrator observation %s' % observation_data[i]['obsid'])
+                continue
+            results=observations[observation_data[i]['obsid']].chgcentre()
+    times['chgcentre']=time.time()                       
+
+
+    ##################################################
+    # selfcal
+    ##################################################
+    for i in xrange(len(observation_data)):
+        if options.selfcal:
+            if observations[observation_data[i]['obsid']].calibration and options.nocal:
+                logger.debug('Skipping selfcal of calibrator observation %s' % observation_data[i]['obsid'])
+                continue
+            # do an initial clean
+            results=observations[observation_data[i]['obsid']].image(
+                suffix='initial',
+                clean_weight=options.clean_weight,
+                imagesize=options.imagesize,
+                pixelscale=options.pixelscale,
+                clean_iterations=4000,
+                clean_gain=options.clean_gain,
+                clean_mgain=options.clean_mgain,
+                clean_minuv=options.clean_minuv,
+                clean_maxuv=options.clean_maxuv,
+                fullpolarization=False,
+                wsclean_arguments='-stopnegative',
+                updateheader=False)
+            if results is None:
+                sys.exit(1)
+
+            # determine the primary beam
+            results=observations[observation_data[i]['obsid']].makepb(suffix='initial',
+                                                                      beammodel=options.beammodel)
+                                                                      
+            if results is None:
+                sys.exit(1)
+            # correct the model image
+            results=observations[observation_data[i]['obsid']].pbcorrect(suffix='initial',
+                                                                         model=True)
+            if results is None:
+                sys.exit(1)
+            # delete the other Stokes images
+            for result in results:
+                if '-Q' in result or '-U' in result or '-V' in result:
+                    os.remove(result)
+            # uncorrect the beam
+            results=observations[observation_data[i]['obsid']].pbcorrect(suffix='initial',
+                                                                         model=True,
+                                                                         uncorrect=True)
+            if results is None:
+                sys.exit(1)
+
+    #sys.exit(1)
     ##################################################
     # imaging
     ##################################################
     for i in xrange(len(observation_data)):
         if observations[observation_data[i]['obsid']].calibration and options.nocal:
+            logger.debug('Skipping imaging of calibrator observation %s' % observation_data[i]['obsid'])
             continue
         results=observations[observation_data[i]['obsid']].image(
             clean_weight=options.clean_weight,
@@ -1095,9 +1392,7 @@ def main():
             clean_minuv=options.clean_minuv,
             clean_maxuv=options.clean_maxuv,
             fullpolarization=options.fullpolarization,
-            wsclean_arguments=options.wsclean_arguments,
-            ncpus=options.ncpus,
-            memfraction=options.memfraction)
+            wsclean_arguments=options.wsclean_arguments)
         if results is None:
             sys.exit(1)
         for j in xrange(len(results)):
@@ -1127,7 +1422,7 @@ def main():
         observation_data[i]['wsclean_arguments']=options.wsclean_arguments
         observation_data[i]['wsclean_command']=' '.join(observations[observation_data[i]['obsid']].wscleancommand)
 
-        results=observations[observation_data[i]['obsid']].makepb(options.beammodel)
+        results=observations[observation_data[i]['obsid']].makepb(beammodel=options.beammodel)
         if results is None:
             sys.exit(1)
         observation_data[i]['beammodel']=options.beammodel
@@ -1159,12 +1454,13 @@ def main():
     times['end']=time.time()
 
 
-    logger.info('Execution time: %d s (setup), %d s (make cal), %d s (apply cal), %d s (autoprocess), %d s (image) %d s (tidy) = %d s (total)' % (
+    logger.info('Execution time: %d s (setup), %d s (make cal), %d s (apply cal), %d s (autoprocess), %d s (chgcentre), %d s (image) %d s (tidy) = %d s (total)' % (
         times['init']-times['start'],
         times['makecal']-times['init'],
         times['applycal']-times['makecal'],
         times['autoprocess']-times['applycal'],        
-        times['image']-times['autoprocess'],        
+        times['chgcentre']-times['autoprocess'],        
+        times['image']-times['chgcentre'],        
         times['end']-times['image'],
         times['end']-times['start']))
 

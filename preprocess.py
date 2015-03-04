@@ -734,9 +734,12 @@ def main():
                                                         matchproject=True,
                                                         priority='time',
                                                         all=False)
-                    logger.info('Found calibrator observation %d for center channel %d' % (cal,channel))
-                    cals+=metadata.fetch_observations(mintime=cal-1,
-                                                      maxtime=cal+1)
+                    if cal is None:
+                        logger.error('Unable to find an appropriate calibrator scan')
+                        sys.exit(1)
+                    logger.info('Found calibrator observation %d for center channel %d' % (cal[0],channel))
+                    cals+=metadata.fetch_observations(mintime=cal[0]-1,
+                                                      maxtime=cal[0]+1)
                     logger.info(str(metadata.MWA_Observation_Summary(cals[-1])))
                     havecalibrator[channel]=True
     results+=cals

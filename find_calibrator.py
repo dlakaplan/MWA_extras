@@ -38,7 +38,19 @@ def find_calibrator(obsid,
                     matchnight=True,
                     priority='time',
                     all=False):
+    """
+    obsid, timediff, distance=find_calibrator(obsid, 
+                    maxtimediff=TimeDelta(1*u.d),
+                    maxseparation=180*u.deg,
+                    sourcename=None,
+                    matchproject=True,
+                    matchnight=True,
+                    priority='time',
+                    all=False):
 
+    timediff is in days
+    distance is in degrees
+    """
     assert priority in ['time','distance']
 
     starttime=Time(obsid, format='gps',scale='utc')-maxtimediff
@@ -108,9 +120,9 @@ def find_calibrator(obsid,
     elif priority=='distance':
         goodlist=numpy.sort(goodlist, order='distance')
     if not all:
-        return goodlist[0]['obsid']
+        return (goodlist[0]['obsid'],goodlist[0]['timediff'],goodlist[0]['distance'])
     else:
-        return list(goodlist['obsid'])
+        return (list(goodlist['obsid']),list(goodlist['timediff']),list(goodlist['distance']))
 
 ##################################################
 def main():
@@ -169,16 +181,21 @@ def main():
                                sourcename=options.source,
                                priority=priority,
                                all=options.all)
-        if not options.all:
-            print obsid,result
+        if result is None:
+            print "None"
+        elif not options.all:
+            print '# Obsid\t\tCalObsid\tTimediff(day)\tDistance(deg)'
+            print '%s\t%s\t%.3f\t\t%.1f' % (obsid,result[0],result[1],result[2])
             if options.verbose:
-                o=metadata.MWA_Observation(int(result))
+                o=metadata.MWA_Observation(int(result[0]))
                 print o
         else:
-            for m in result:
-                print obsid,m
+            print '# Obsid\t\tCalObsid\tTimediff(day)\tDistance(deg)'
+            for i in xrange(len(result[0])):
+                print '%s\t%s\t%.3f\t\t%.1f' % (obsid,result[0][i],
+                                                result[1][i],result[2][i])
                 if options.verbose:
-                    o=metadata.MWA_Observation(int(m))
+                    o=metadata.MWA_Observation(int(result[0][i]))
                     print o
             
     sys.exit(0)

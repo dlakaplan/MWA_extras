@@ -362,13 +362,14 @@ def write_calmodelfile(calibrator_name):
     return outputcalmodelfile
             
 ##################################################
-def calibrate_anoko(obsid,outputcalmodelfile, 
+def calibrate_anoko(obsid,outputcalmodelfile=None, 
                     minuv=60,
                     suffix=None, 
                     corrected=False,
                     ncpus=32):
     """
-    calibrate_anoko(obsid,outputcalmodelfile, suffix=None, 
+    calibrate_anoko(obsid,outputcalmodelfile=None, minuv=60,
+    suffix=None, 
     corrected=False,
     ncpus=32)
     returns name of calibration (gain) file on success
@@ -390,10 +391,11 @@ def calibrate_anoko(obsid,outputcalmodelfile,
                        str(ncpus),
                        '-a',
                        '0.001',
-                       '0.0001',
-                       '-m',
-                       outputcalmodelfile,
-                       '%s.ms' % obsid,
+                       '0.0001']
+    if outputcalmodelfile is not None:
+        calibratecommand+=['-m',
+                           outputcalmodelfile]
+    calibratecommand+=['%s.ms' % obsid,
                        calfile]
     logger.info('Will run:\n\t%s' % ' '.join(calibratecommand))
     p=subprocess.Popen(' '.join(calibratecommand),
@@ -583,15 +585,15 @@ class Observation(metadata.MWA_Observation):
         also sets self.calibratorfile to that file
         """
         assert self.caltype in ['anoko','casa']
-        if not self.calibration:
-            return None
-        if self.caltype=='anoko' and not selfcal:
-            calibrator_name=self.calibratorsource
-            self.calmodelfile=write_calmodelfile(calibrator_name)
-            if self.calmodelfile is None:
-                return None
-            self.filestodelete.append(self.calmodelfile)
         if not selfcal:
+            if not self.calibration:
+                return None
+            if self.caltype=='anoko':
+                calibrator_name=self.calibratorsource
+                self.calmodelfile=write_calmodelfile(calibrator_name)
+                if self.calmodelfile is None:
+                    return None
+                self.filestodelete.append(self.calmodelfile)
             self.calibratorfile='%s.cal' % self.obsid
             if os.path.exists(self.calibratorfile):
                 if self.clobber:
@@ -611,7 +613,6 @@ class Observation(metadata.MWA_Observation):
                                        ncpus=self.ncpus)
             else:
                 result=calibrate_anoko(self.obsid,
-                                       self.calmodelfile,
                                        suffix='selfcal',
                                        corrected=True,
                                        minuv=minuv,                                   
@@ -946,6 +947,8 @@ class Observation(metadata.MWA_Observation):
             #                         'Calibrator observation')
             f[0].header['CALFILE']=(self.calibratorfile,
                                     'Calibrator file')
+            f[0].header['CALMINUV']=(self.calminuv,
+                                     '[m] Min UV for calibration')
             f[0].header['AUTOPEEL']=self.autoprocesssources
             f[0].header['CHGCENTR']=self.centerchanged
             try:
@@ -1029,6 +1032,11 @@ class Observation(metadata.MWA_Observation):
             for l in p.stdout.readlines():
                 logger.debug(l.rstrip())
             for l in p.stderr.readlines():
+                # I get a lot of errors about UTC-UT being
+                # possible wrong, but I don't think it matters
+                # here
+                if 'dUTC(Double)' in l:
+                    continue
                 logger.error(l.rstrip())
             returncode=p.poll()
             if returncode is not None:
@@ -1161,48 +1169,54 @@ def main():
     usage="Usage: %prog [options] <msfiles>\n"
     parser = OptionParser(usage=usage)
 
-    correct_primarybeam=True
-    parser.add_option('--caltype',dest='caltype',default='anoko',
-                      type='choice',
-                      choices=['anoko','casa'],
-                      help='Type of calibration [default=%default]')
-    parser.add_option('--recalibrate',dest='recalibrate',default=False,
-                      action='store_true',
-                      help='Recalibrate existing output?')
-    parser.add_option('--autoprocess',dest='autoprocess',default=False,
-                      action='store_true',
-                      help='Run autoprocess?')
-    parser.add_option('--chgcentre',dest='chgcentre',default=False,
-                      action='store_true',
-                      help='Run chgcentre?')
-    parser.add_option('--selfcal',dest='selfcal',default=False,
-                      action='store_true',
-                      help='Run selfcal?')
-    parser.add_option('--size',dest='imagesize',default=2048,type='int',
+    calibration_parser=OptionGroup(parser, 'Calibration options')
+    imaging_parser=OptionGroup(parser, 'Imaging options')
+    control_parser=OptionGroup(parser, 'Control options')
+    
+    calibration_parser.add_option('--caltype',dest='caltype',default='anoko',
+                                  type='choice',
+                                  choices=['anoko','casa'],
+                                  help='Type of calibration [default=%default]')
+    calibration_parser.add_option('--recalibrate',dest='recalibrate',default=False,
+                                  action='store_true',
+                                  help='Recalibrate existing output?')
+    calibration_parser.add_option('--calminuv',dest='calminuv',default=60,
+                                  type='float',
+                                  help='Minimum UV distance in m for calibration [default=%default]')
+    control_parser.add_option('--autoprocess',dest='autoprocess',default=False,
+                              action='store_true',
+                              help='Run autoprocess?')
+    control_parser.add_option('--chgcentre',dest='chgcentre',default=False,
+                              action='store_true',
+                              help='Run chgcentre?')
+    control_parser.add_option('--selfcal',dest='selfcal',default=False,
+                              action='store_true',
+                              help='Run selfcal?')
+    imaging_parser.add_option('--size',dest='imagesize',default=2048,type='int',
                       help='Image size in pixels [default=%default]')
-    parser.add_option('--scale',dest='pixelscale',default=0.015,type='float',
+    imaging_parser.add_option('--scale',dest='pixelscale',default=0.015,type='float',
                       help='Pixel scale in deg [default=%default]')
-    parser.add_option('--niter',dest='clean_iterations',default=100,
+    imaging_parser.add_option('--niter',dest='clean_iterations',default=100,
                       type='int',
                       help='Clean iterations [default=%default]')
-    parser.add_option('--mgain',dest='clean_mgain',default=1,
+    imaging_parser.add_option('--mgain',dest='clean_mgain',default=1,
                       type='float',
                       help='Clean major cycle gain [default=%default]')
-    parser.add_option('--gain',dest='clean_gain',default=0.1,
+    imaging_parser.add_option('--gain',dest='clean_gain',default=0.1,
                       type='float',
                       help='Clean gain [default=%default]')
-    parser.add_option('--weight',dest='clean_weight',default='uniform',
+    imaging_parser.add_option('--weight',dest='clean_weight',default='uniform',
                       help='Clean weighting [default=%default]')
-    parser.add_option('--minuv',dest='clean_minuv',default=0,
+    imaging_parser.add_option('--minuv',dest='clean_minuv',default=0,
                       type='float',
                       help='Minimum UV distance in wavelengths [default=%default]')
-    parser.add_option('--maxuv',dest='clean_maxuv',default=0,
+    imaging_parser.add_option('--maxuv',dest='clean_maxuv',default=0,
                       type='float',
                       help='Maximum UV distance in wavelengths [default=%default]')
-    parser.add_option('--fullpol',dest='fullpolarization',default=False,
+    imaging_parser.add_option('--fullpol',dest='fullpolarization',default=False,
                       action='store_true',
                       help='Process full polarization (including cross terms)?')
-    parser.add_option('--wscleanargs',dest='wsclean_arguments',default='',
+    imaging_parser.add_option('--wscleanargs',dest='wsclean_arguments',default='',
                       help='Additional wsclean arguments')
     parser.add_option('--beam',dest='beammodel',default='2014i',type='choice',
                       choices=['2014i','2014','2013'],
@@ -1211,9 +1225,9 @@ def main():
                       help='Name for output summary table [default=%default]')
     parser.add_option('--summaryformat',dest='summaryformat',default='ascii.commented_header',
                       help='Format for output summary table (from astropy.table) [default=%default]')   
-    parser.add_option('--nocal',dest='nocal',default=False,
-                      action='store_true',
-                      help='Do not image the calibrator observations?')
+    control_parser.add_option('--nocal',dest='nocal',default=False,
+                              action='store_true',
+                              help='Do not image the calibrator observations?')
     parser.add_option('--clobber',dest='clobber',default=False,
                       action='store_true',
                       help='Clobber existing output?')
@@ -1236,6 +1250,11 @@ def main():
                       help="Each -v option produces more informational/debugging output")
     parser.add_option("-q", "--quiet", dest="quietness", default=0, action="count",
                       help="Each -q option produces less error/warning/informational output")
+
+    parser.add_option_group(control_parser)
+    parser.add_option_group(calibration_parser)
+    parser.add_option_group(imaging_parser)
+    
 
     (options, args) = parser.parse_args()
     loglevels = {0: [logging.DEBUG, 'DEBUG'],
@@ -1282,6 +1301,7 @@ def main():
                                         ('caltype','a10'),
                                         ('calibratorsource','a20'),
                                         ('calibratorfile','a30'),
+                                        ('calminuv','f4'),
                                         ('clean_iterations','i4'),
                                         ('imagesize','i4'),
                                         ('pixelscale','f4'),
@@ -1342,7 +1362,7 @@ def main():
     # generate calibration solutions
     ##################################################
     for i in calibrators:
-        result=observations[observation_data[i]['obsid']].make_cal()
+        result=observations[observation_data[i]['obsid']].make_cal(minuv=options.calminuv)
         if result is None:
             sys.exit(1)
         observation_data[i]['calibratorfile']=result
@@ -1460,7 +1480,8 @@ def main():
                 fullpolarization=True,
                 updateheader=False)
 
-            results=observations[observation_data[i]['obsid']].make_cal(selfcal=True)
+            results=observations[observation_data[i]['obsid']].make_cal(minuv=options.calminuv,
+                                                                        selfcal=True)
             if results is None:
                 sys.exit(1)
             

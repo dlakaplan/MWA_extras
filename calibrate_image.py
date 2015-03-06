@@ -25,6 +25,8 @@ import subprocess
 from astropy.table import Table,Column
 import collections,glob,numpy
 from astropy.io import fits
+from astropy.coordinates import SkyCoord
+from astropy import units as u
 
 ##############################
 # Custom formatter
@@ -87,8 +89,27 @@ anokocalibrate='~kaplan/mwa/anoko/mwa-reduce/build/calibrate'
 anokoapplycal='~kaplan/mwa/anoko/mwa-reduce/build/applysolutions'
 anokocatalog='~kaplan/mwa/anoko/mwa-reduce/catalogue/model-catalogue_new.txt'
 
+brightsources={'3C353': SkyCoord('17h20m28.1s','-00d58m47s'),
+               '3C409': SkyCoord('20h14m27.6s','23d34m53s'),
+               '3C444': SkyCoord('-01h45m34.4s','-17d01m30s'),
+               'CasA': SkyCoord('23h23m27.9s','58d48m42s'),
+               'CenA': SkyCoord('13h25m27.6s','-43d01m09s'),
+               'Crab': SkyCoord('05h34m32.0s','22d00m52s'),
+               'CygA': SkyCoord('19h59m28.4s','40d44m02s'),
+               'ESO362-G021': SkyCoord('05h22m58.0s','-36d27m31s'),
+               'ForA': SkyCoord('3h22m41.7s','-37d12m30s'),
+               'HerA': SkyCoord('-07h08m52.1s','04d59m16s'),
+               'HydA': SkyCoord('09h18m05.1s','-12d05m42s'),
+               'NGC253': SkyCoord('00h47m34.7s','-25d17m30s'),
+               'PicA': SkyCoord('05h19m30.7s','-45d45m35s'),
+               'PKS2153-69': SkyCoord('21h57m06.0s','-69d41m24s'),
+               'PKS2331-41': SkyCoord('23h34m26.2s','-41d25m24s'),
+               'PKS2356-61': SkyCoord('23h59m04.3s','-60d54m59s'),
+               'PKSJ0130-2610': SkyCoord('01h30m27.8s','-26d09m56s'),
+               'VirA': SkyCoord('12h30m49.4s','12d23m28s')}
+
 ##################################################
-def makemetafits(obsid):        
+def makemetafits(obsid, directory=None):        
     """
     makemetafits(obsid)
     returns metafits name on success
@@ -96,7 +117,10 @@ def makemetafits(obsid):
     """
     m=metadata.instrument_configuration(int(obsid))
     h=m.make_metafits()
-    metafits='%s.metafits' % obsid
+    if directory is None:
+        metafits='%s.metafits' % obsid
+    else:
+        metafits=os.path.join(directory,'%s.metafits' % obsid)
     if os.path.exists(metafits):
         os.remove(metafits)
     try:
@@ -222,7 +246,7 @@ def getcasaversion():
 
 
 ##################################################
-def calibrate_casa(obsid):
+def calibrate_casa(obsid, directory=None):
     """
     calibrate_casa(obsid)
     returns name of calibration (gain) file on success
@@ -264,6 +288,10 @@ def calibrate_casa(obsid):
         logger.error('CASA calibration command produced no ouptut')
         return None
     else:
+        if directory is not None:
+            os.rename('%s.cal' % obsid, os.path.join(directory,
+                                                     '%s.cal' % obsid))
+            return os.path.join(directory,'%s.cal' % obsid)
         return '%s.cal' % obsid
 
 ##################################################
@@ -334,9 +362,9 @@ def extract_calmodel(filename, sourcename):
     return [lines[0]]+lines[istart:iend+1]
 
 ##################################################
-def write_calmodelfile(calibrator_name):
+def write_calmodelfile(calibrator_name, directory=None):
     """
-    write_calmodelfile(calibrator_name)
+    write_calmodelfile(calibrator_name, directory=None)
     extracts the relevant info from the master calibrator model file
     and writes it to a single-source file
     returns the name of that file on success, or None on failure
@@ -350,6 +378,8 @@ def write_calmodelfile(calibrator_name):
         return None
     outputcalmodelfile='%s_%s.model' % (calibrator_name,
                                         datetime.datetime.now().strftime('%Y%m%d'))
+    if directory is not None:
+        outputcalmodelfile=os.path.join(directory,outputcalmodelfile)
     try:
         f=open(outputcalmodelfile,'w')
     except Exception, e:
@@ -366,11 +396,13 @@ def calibrate_anoko(obsid,outputcalmodelfile=None,
                     minuv=60,
                     suffix=None, 
                     corrected=False,
+                    directory=None,
                     ncpus=32):
     """
     calibrate_anoko(obsid,outputcalmodelfile=None, minuv=60,
     suffix=None, 
     corrected=False,
+    directory=None,
     ncpus=32)
     returns name of calibration (gain) file on success
     """
@@ -379,6 +411,8 @@ def calibrate_anoko(obsid,outputcalmodelfile=None,
         calfile='%s.cal' % obsid
     else:
         calfile='%s_%s.cal' % (obsid,suffix)
+    if directory is not None:
+        calfile=os.path.join(directory, calfile)
     calibratecommand=[anokocalibrate]
     if minuv is not None and minuv > 0:
         calibratecommand+=['-minuv',
@@ -532,11 +566,12 @@ class Observation(metadata.MWA_Observation):
         self.otherkeys={}
         self.autoprocesssources='None'
         self.centerchanged=False
+        self.selfcal=False
 
-        if os.path.exists('%s.metafits' % self.obsid):
-            self.metafits='%s.metafits' % self.obsid
+        if os.path.exists(os.path.join(self.basedir,'%s.metafits' % self.obsid)):
+            self.metafits=os.path.join(self.basedir,'%s.metafits' % self.obsid)
         else:
-            self.metafits=makemetafits(self.obsid)
+            self.metafits=makemetafits(self.obsid, directory=self.basedir)
             
         self.observation=metadata.MWA_Observation(self.obsid)
 
@@ -590,11 +625,11 @@ class Observation(metadata.MWA_Observation):
                 return None
             if self.caltype=='anoko':
                 calibrator_name=self.calibratorsource
-                self.calmodelfile=write_calmodelfile(calibrator_name)
+                self.calmodelfile=write_calmodelfile(calibrator_name, directory=self.basedir)
                 if self.calmodelfile is None:
                     return None
                 self.filestodelete.append(self.calmodelfile)
-            self.calibratorfile='%s.cal' % self.obsid
+            self.calibratorfile=os.path.join(self.basedir,'%s.cal' % self.obsid)
             if os.path.exists(self.calibratorfile):
                 if self.clobber:
                     logger.warning('Calibration file %s exists but clobber=True; deleting...' % self.calibratorfile)
@@ -609,18 +644,20 @@ class Observation(metadata.MWA_Observation):
             if not selfcal:
                 result=calibrate_anoko(self.obsid,
                                        self.calmodelfile,
-                                       minuv=minuv,                                   
+                                       minuv=minuv,    
+                                       directory=self.basedir,
                                        ncpus=self.ncpus)
             else:
                 result=calibrate_anoko(self.obsid,
                                        suffix='selfcal',
                                        corrected=True,
                                        minuv=minuv,                                   
+                                       directory=self.basedir,
                                        ncpus=self.ncpus)
 
             self.calminuv=minuv
         elif self.caltype=='casa':        
-            result=calibrate_casa(self.obsid)
+            result=calibrate_casa(self.obsid, directory=self.basedir)
         if result is not None:
             self.calibratorfile=result
             logger.info('Wrote %s' % self.calibratorfile)
@@ -857,6 +894,7 @@ class Observation(metadata.MWA_Observation):
             name='%s_%s' % (self.obsid,suffix)
         else:
             name=str(self.obsid)
+        name=os.path.join(self.basedir, name)
         wscleancommand=['wsclean',
                         '-j',
                         str(self.ncpus),
@@ -951,6 +989,7 @@ class Observation(metadata.MWA_Observation):
                                      '[m] Min UV for calibration')
             f[0].header['AUTOPEEL']=self.autoprocesssources
             f[0].header['CHGCENTR']=self.centerchanged
+            f[0].header['SELFCAL']=self.selfcal
             try:
                 fm=fits.open(self.metafits)
             except Exception,e:
@@ -1005,11 +1044,14 @@ class Observation(metadata.MWA_Observation):
             name='%s_%s' % (self.obsid,suffix)
         else:
             name=str(self.obsid)
+        beamname=os.path.join(self.basedir,'beam-%s' % name)
+        name=os.path.join(self.basedir, name)
+
         self.beammodel=beammodel
         beamcommand=['beam',
                      '-' + beammodel,
                      '-name',
-                     'beam-%s' % name,
+                     beamname,
                      '-proto',
                      self.rawfiles[0],
                      '-ms',
@@ -1017,8 +1059,8 @@ class Observation(metadata.MWA_Observation):
         
         expected_beamoutput=[]
         for pol in ['xxr','xxi','yyr','yyi','xyr','xyi','yxr','yxi']:
-            expected_beamoutput.append('beam-%s-%s.fits' % (name,
-                                                            pol))
+            expected_beamoutput.append('%s-%s.fits' % (beamname,
+                                                       pol))
 
         logger.info('Will run:\n\t%s' % ' '.join(beamcommand))
         p=subprocess.Popen(' '.join(beamcommand),
@@ -1076,7 +1118,7 @@ class Observation(metadata.MWA_Observation):
             name='%s_%s' % (self.obsid,suffix)
         else:
             name=str(self.obsid)
-
+        name=os.path.join(self.basedir, name)
         if not model:
             imagetype='image.fits'
         else:
@@ -1191,7 +1233,9 @@ def main():
                               help='Run chgcentre?')
     control_parser.add_option('--selfcal',dest='selfcal',default=False,
                               action='store_true',
-                              help='Run selfcal?')
+                              help='Run selfcal?')    
+    control_parser.add_option('--autosize',default=1,type='float',
+                              help='Maximum possible size increase factor to include a bright source [default=%default]')
     imaging_parser.add_option('--size',dest='imagesize',default=2048,type='int',
                       help='Image size in pixels [default=%default]')
     imaging_parser.add_option('--scale',dest='pixelscale',default=0.015,type='float',
@@ -1228,6 +1272,8 @@ def main():
     control_parser.add_option('--nocal',dest='nocal',default=False,
                               action='store_true',
                               help='Do not image the calibrator observations?')
+    parser.add_option('-o','--out',dest='out',default='./',
+                      help='Output destination directory [default=%default]')
     parser.add_option('--clobber',dest='clobber',default=False,
                       action='store_true',
                       help='Clobber existing output?')
@@ -1321,10 +1367,18 @@ def main():
     ##################################################
     # gather initial data
     ##################################################
+    if not (os.path.exists(options.out) and os.path.isdir(options.out)):
+        logger.warning('Requested output directory %s does not exist; creating...' % options.out)
+        try:
+            os.mkdir(options.out)
+        except Exception,e:
+            logger.error('Problem making output directory %s:\n\t%s' % (options.out,e))
+            sys.exit(1)
     for i in xrange(len(files)):
         file=files[i]
         obsid=int(file.split('.')[0])
         observations[obsid]=Observation(obsid, 
+                                        outputdir=options.out,
                                         caltype=options.caltype,
                                         clobber=options.clobber,
                                         ncpus=options.ncpus,
@@ -1351,7 +1405,21 @@ def main():
             observation_data[i]['calibratorsource']=''
 
         observation_data[i]['metafits']=observations[obsid].metafits
-                             
+        pointingcenter=SkyCoord(observations[obsid].RA*u.degree,
+                                observations[obsid].Dec*u.degree)
+        increasesize=False        
+        for source in brightsources.keys():
+            distance=pointingcenter.separation(brightsources[source])
+            if distance > 0.9*(options.imagesize/2)*options.pixelscale*u.degree and distance < options.autosize*(options.imagesize/2)*options.pixelscale*u.degree:
+                logger.warning('Source %s is %.1f deg from field center but outside imaged area; recommend increasing imaged area' % (source,distance.value))
+                increasesize=True
+    if increasesize and options.autosize>1:
+        logger.warning('Increasing imaged area to %dx%d (%.1f deg)' % (options.imagesize*options.autosize,
+                                                                       options.imagesize*options.autosize,
+                                                                       options.imagesize*options.autosize*options.pixelscale))
+        options.imagesize*=options.autosize
+
+
     calibrators, notcalibrators, cal_observations=identify_calibrators(observation_data)
     for i in notcalibrators:
         observation_data[i]['calibrator']=cal_observations[observation_data[i]['obsid']]
@@ -1377,7 +1445,7 @@ def main():
             cal_touse=numpy.where(observation_data[i]['calibrator']==observation_data['obsid'])[0][0]
         else:
             cal_touse=i
-        observations[observation_data[i]['obsid']].calibratorfile=observation_data[cal_touse]['calibratorfile']
+        observations[observation_data[i]['obsid']].calibratorfile=observations[observation_data[cal_touse]['obsid']].calibratorfile
         
         result=observations[observation_data[i]['obsid']].calibrate(recalibrate=options.recalibrate)
         if result is False or result is None:
@@ -1438,7 +1506,7 @@ def main():
             observations[observation_data[i]['obsid']].filestodelete+=results
                 
             # determine the primary beam
-            results=observations[observation_data[i]['obsid']].makepb(suffix='initial',
+            results=observations[observation_data[i]['obsid']].makepb(suffix='selfcal',
                                                                       beammodel=options.beammodel)
             # we don't want these in the end
             observations[observation_data[i]['obsid']].filestodelete+=results
@@ -1446,7 +1514,7 @@ def main():
             if results is None:
                 sys.exit(1)
             # correct the model image
-            results=observations[observation_data[i]['obsid']].pbcorrect(suffix='initial',
+            results=observations[observation_data[i]['obsid']].pbcorrect(suffix='selfcal',
                                                                          model=True)
             # we don't want these in the end
             observations[observation_data[i]['obsid']].filestodelete+=results
@@ -1458,7 +1526,7 @@ def main():
                 if '-Q' in result or '-U' in result or '-V' in result:
                     os.remove(result)
             # uncorrect the beam
-            results=observations[observation_data[i]['obsid']].pbcorrect(suffix='initial',
+            results=observations[observation_data[i]['obsid']].pbcorrect(suffix='selfcal',
                                                                          model=True,
                                                                          uncorrect=True)
             if results is None:
@@ -1485,9 +1553,12 @@ def main():
             if results is None:
                 sys.exit(1)
             
+            result=observations[observation_data[i]['obsid']].calibrate(selfcal=True)
+            if result is False or result is None:
+                sys.exit(1)
+            observation_data[i]['calibratorfile']=observations[observation_data[i]['obsid']].calibratorfile
+            observations[observation_data[i]['obsid']].selfcal=True
 
-
-    sys.exit(1)
     ##################################################
     # imaging
     ##################################################
@@ -1543,8 +1614,8 @@ def main():
         results=observations[observation_data[i]['obsid']].pbcorrect()
         if results is None:
             sys.exit(1)
-        for j in xrange(len(results)):
-            observation_data[i]['corrimages'][j]=results[j]
+        # for j in xrange(len(results)):
+        #    observation_data[i]['corrimages'][j]=results[j]
 
    
     times['image']=time.time()
@@ -1567,6 +1638,10 @@ def main():
     times['end']=time.time()
 
 
+    # get rid of extraneous log files
+    observations[observation_data[i]['obsid']].filestodelete+=glob.glob('casapy-*.log')
+    observations[observation_data[i]['obsid']].filestodelete+=glob.glob('ipython-*.log')
+
     logger.info('Execution time: %d s (setup), %d s (make cal), %d s (apply cal), %d s (autoprocess), %d s (chgcentre), %d s (image) %d s (tidy) = %d s (total)' % (
         times['init']-times['start'],
         times['makecal']-times['init'],
@@ -1576,6 +1651,8 @@ def main():
         times['image']-times['chgcentre'],        
         times['end']-times['image'],
         times['end']-times['start']))
+
+
 
 
     sys.exit(0)

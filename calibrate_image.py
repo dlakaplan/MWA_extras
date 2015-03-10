@@ -146,8 +146,7 @@ def get_msinfo(msfile):
     try:
         casa = drivecasa.Casapy(casa_dir=casapy,
                                 working_dir=os.path.abspath(os.curdir),
-                                timeout=1200,
-                                gui=False)
+                                timeout=1200)
     except Exception, e:
         logger.error('Unable to instantiate casa:\n%s' % e)
         return None
@@ -194,8 +193,7 @@ def check_calibrated(msfile):
     try:
         casa = drivecasa.Casapy(casa_dir=casapy,
                                 working_dir=os.path.abspath(os.curdir),
-                                timeout=1200,
-                                gui=False)
+                                timeout=1200)
     except Exception, e:
         logger.error('Unable to instantiate casa:\n%s' % e)
         return None
@@ -229,8 +227,8 @@ def getcasaversion():
     try:
         casa = drivecasa.Casapy(casa_dir=casapy,
                                 working_dir=os.path.abspath(os.curdir),
-                                timeout=1200,
-                                gui=False)
+                                timeout=1200)
+
     except Exception, e:
         logger.error('Unable to instantiate casa:\n%s' % e)
         return None
@@ -259,8 +257,8 @@ def calibrate_casa(obsid, directory=None):
     try:
         casa = drivecasa.Casapy(casa_dir=casapy,
                                 working_dir=basedir,
-                                timeout=1200,
-                                gui=False)
+                                timeout=1200)
+
     except Exception, e:
         logger.error('Unable to instantiate casa:\n%s' % e)
         return None
@@ -307,8 +305,8 @@ def applycal_casa(obsid, calfile):
     try:
         casa = drivecasa.Casapy(casa_dir=casapy,
                                 working_dir=basedir,
-                                timeout=1200,
-                                gui=False)
+                                timeout=1200)
+
     except Exception, e:
         logger.error('Unable to instantiate casa:\n%s' % e)
         return None
@@ -739,6 +737,8 @@ class Observation(metadata.MWA_Observation):
                 output.append(l)
                 logger.debug(l.rstrip())
             for l in p.stderr.readlines():
+                if 'dUTC(Double)' in l:
+                    continue
                 logger.error(l.rstrip())
             returncode=p.poll()
             if returncode is not None:
@@ -753,9 +753,9 @@ class Observation(metadata.MWA_Observation):
                 distance=float(l.split()[-2].replace('distance=',''))
                 distances[source]=distance
             if l.startswith('- '):
-                if not '- No' in l:
-                    tasks.append(l[2:])
+                # if not '- No' in l:
                 if 'Peel out source' in l:
+                    tasks.append(l[2:])
                     peelsource=l.split()[-1]
     
         if len(tasks)==0:
@@ -786,6 +786,8 @@ class Observation(metadata.MWA_Observation):
             for l in p.stdout.readlines():
                 logger.debug(l.rstrip())
             for l in p.stderr.readlines():
+                if 'dUTC(Double)' in l:
+                    continue
                 logger.error(l.rstrip())
             returncode=p.poll()
             if returncode is not None:
@@ -1118,6 +1120,8 @@ class Observation(metadata.MWA_Observation):
             name='%s_%s' % (self.obsid,suffix)
         else:
             name=str(self.obsid)
+            
+        beamname=os.path.join(self.basedir,'beam-%s' % name)
         name=os.path.join(self.basedir, name)
         if not model:
             imagetype='image.fits'
@@ -1129,7 +1133,7 @@ class Observation(metadata.MWA_Observation):
             pbcorrectcommand.append('-uncorrect')
         pbcorrectcommand+=[name,
                            imagetype,
-                           'beam-%s' % name,
+                           beamname,
                            name]
         expected_pbcorroutput=[]
         if uncorrect:
@@ -1301,7 +1305,7 @@ def main():
     parser.add_option_group(calibration_parser)
     parser.add_option_group(imaging_parser)
     
-
+    command=' '.join(sys.argv)
     (options, args) = parser.parse_args()
     loglevels = {0: [logging.DEBUG, 'DEBUG'],
                  1: [logging.INFO, 'INFO'],
@@ -1488,7 +1492,7 @@ def main():
                 continue
             # do an initial clean
             results=observations[observation_data[i]['obsid']].image(
-                suffix='initial',
+                suffix='selfcal',
                 clean_weight=options.clean_weight,
                 imagesize=options.imagesize,
                 pixelscale=options.pixelscale,
@@ -1536,7 +1540,7 @@ def main():
 
             results=observations[observation_data[i]['obsid']].image(
                 predict=True,
-                suffix='initial',
+                suffix='selfcal',
                 clean_weight=options.clean_weight,
                 imagesize=options.imagesize,
                 pixelscale=options.pixelscale,
@@ -1591,6 +1595,7 @@ def main():
             f[0].header['MWAPYVER']=(mwapy.__version__,'MWAPY version')
             f[0].header['WSCLNVER']=(wscleanversion,'WSCLEAN version')
             f[0].header['COTTRVER']=(observation_data[i]['ms_cotterversion'],'Cotter version')
+            f[0].header.add_history(command)
             f.flush()
             observation_data[i]['rawimages'][j]=results[j]
 

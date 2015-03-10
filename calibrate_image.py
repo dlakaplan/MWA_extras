@@ -83,11 +83,17 @@ try:
 except ImportError:
     _CASA=False
 
-casapy='/usr/local/casapy'
-calmodelfile='/home/kaplan/MWA_extras/model_a-team.txt'
-anokocalibrate='~kaplan/mwa/anoko/mwa-reduce/build/calibrate'
-anokoapplycal='~kaplan/mwa/anoko/mwa-reduce/build/applysolutions'
-anokocatalog='~kaplan/mwa/anoko/mwa-reduce/catalogue/model-catalogue_new.txt'
+
+catalogdir=os.path.join(os.path.split(os.path.abspath(__file__))[0],'catalogs')
+calmodelfile=os.path.join(catalogdir,'model_a-team.txt')
+anokocatalog=os.path.join(catalogdir,'model-catalogue_new.txt')
+casapy=None
+anoko=None
+
+if not os.path.exists(calmodelfile):
+    logger.warning('Unable to find calibrator model file %s' % calmodelfile)
+if not os.path.exists(anokocatalog):
+    logger.warning('Unable to find anoko autoprocess catalog file %s' % anokocatalog)
 
 brightsources={'3C353': SkyCoord('17h20m28.1s','-00d58m47s'),
                '3C409': SkyCoord('20h14m27.6s','23d34m53s'),
@@ -107,6 +113,96 @@ brightsources={'3C353': SkyCoord('17h20m28.1s','-00d58m47s'),
                'PKS2356-61': SkyCoord('23h59m04.3s','-60d54m59s'),
                'PKSJ0130-2610': SkyCoord('01h30m27.8s','-26d09m56s'),
                'VirA': SkyCoord('12h30m49.4s','12d23m28s')}
+
+##################################################
+class CASAfinder():
+    """
+    casapy=CASAfinder(<directories>).find()
+    """
+    path=['/usr/local/casapy']
+
+    def __init__(self, *args):
+        """
+        CASAfinder(paths=['/usr/local/casapy']):    
+        try to find casapy in the path
+        will also check ENV variables
+        """
+
+        if len(args)>0:
+            self.paths= list(args) + CASAfinder.path
+        else:
+            self.paths=CASAfinder.path
+
+    def find(self):
+        actualcasapy=None
+        if os.environ.has_key('CASAPY'):
+            actualcasapy=os.environ['CASAPY']
+            logger.debug('Identified CASAPY %s from $CASAPY' % actualcasapy)
+        else:
+            for path in self.paths:
+                if path is None:
+                    continue
+                path=os.path.expanduser(path)
+                if os.path.exists(path):
+                    actualcasapy=path
+                    logger.debug('Identified CASAPY %s' % actualcasapy)
+                    break
+                
+
+        if not os.path.exists(actualcasapy):
+            logger.error('CASAPY %s does not exist' % actualcasapy)
+            return None
+        if not os.path.isdir(actualcasapy):
+            newcasapy=os.path.split(actualcasapy)[0]
+            logger.warning('CASAPY %s does not appear to be a directory; trying %s' % (actualcasapy,
+                                                                                       newcasapy))
+            actualcasapy=newcasapy
+
+        return actualcasapy
+
+##################################################
+class ANOKOfinder():
+    """
+    """
+    path=['~kaplan/mwa/anoko/mwa-reduce/build/']
+
+    def __init__(self, *args):
+        """
+        """
+
+        if len(args)>0:
+            self.paths= list(args) + ANOKOfinder.path
+        else:
+            self.paths=ANOKOfinder.path
+
+    def find(self):
+        actualanoko=None
+        if os.environ.has_key('ANOKO'):
+            actualanoko=os.environ['ANOKO']
+            logger.debug('Identified ANOKO %s from $ANOKO' % actualanoko)
+        else:
+            for path in self.paths:
+                if path is None:
+                    continue
+                path=os.path.expanduser(path)
+                if os.path.exists(path) and os.path.exists(os.path.join(path,'calibrate')) and os.path.exists(os.path.join(path,'applysolutions')):
+                    actualanoko=path
+                    logger.debug('Identified ANOKO %s' % actualanoko)
+                    break
+                
+        if actualanoko is None:
+            logger.error('No ANOKO identified')
+            return None
+
+        if not os.path.exists(actualanoko):
+            logger.error('ANOKO %s does not exist' % actualanoko)
+            return None
+        if not (os.path.exists(os.path.join(actualanoko,'calibrate')) and os.path.exists(os.path.join(actualanoko,'applysolutions'))):
+            logger.error('ANOKO executables %s and %s do not exist' % ('calibrate','applysolutions'))
+            return None
+
+        return actualanoko
+
 
 ##################################################
 def makemetafits(obsid, directory=None):        
@@ -139,6 +235,7 @@ def get_msinfo(msfile):
     inttime is integration time in s
     otherkeys is a dictionary containing other header keywords
     """
+
     if not _CASA:
         logger.error('requires drivecasa')
         return None
@@ -411,7 +508,7 @@ def calibrate_anoko(obsid,outputcalmodelfile=None,
         calfile='%s_%s.cal' % (obsid,suffix)
     if directory is not None:
         calfile=os.path.join(directory, calfile)
-    calibratecommand=[anokocalibrate]
+    calibratecommand=[os.path.join(anoko,'calibrate')]
     if minuv is not None and minuv > 0:
         calibratecommand+=['-minuv',
                            str(minuv)]
@@ -455,7 +552,7 @@ def applycal_anoko(obsid, calfile, corrected=False):
     applycal_anoko(obsid, calfile, corrected=False):
     returns True on success
     """
-    applycalcommand=[anokoapplycal]
+    applycalcommand=[os.path.join(anoko,'applysolutions')]
     if corrected:
         applycalcommand+=['-datacolumn',
                           'CORRECTED_DATA']
@@ -1296,6 +1393,10 @@ def main():
     parser.add_option('--memory',dest='memfraction',default=50,
                       type='int',
                       help='Percentage of total RAM to be used [default=%default]')   
+    parser.add_option('--casapy',dest='casapy',default=None,
+                      help='Path to CASAPY directory [default=%default]')
+    parser.add_option('--anoko',dest='anoko',default=None,
+                      help='Path to anoko/mwa-reduce executable directory (calibrate, applysolutions) [default=%default]')
     parser.add_option("-v", "--verbose", dest="loudness", default=0, action="count",
                       help="Each -v option produces more informational/debugging output")
     parser.add_option("-q", "--quiet", dest="quietness", default=0, action="count",
@@ -1316,6 +1417,38 @@ def main():
     level = max(min(logdefault - options.loudness + options.quietness,4),0)
     logger.setLevel(loglevels[level][0])
     logger.info('Log level set: messages that are %s or higher will be shown.' % loglevels[level][1])
+
+    ##################################################
+    # figure out where CASA lives
+    ##################################################
+    global casapy
+    if options.casapy is not None:
+        casapy=CASAfinder(options.casapy).find()
+    else:
+        casapy=CASAfinder().find()
+    if casapy is None:
+        if options.casapy is not None:
+            searchpath=CASAfinder(options.casapy).paths
+        else:
+            searchpath=CASAfinder().paths
+        logger.error('Unable to find CASAPY in search path:\n\t%s' % ('\n\t'.join(searchpath)))
+        sys.exit(1)
+
+    ##################################################
+    # and anoko executables
+    ##################################################
+    global anoko
+    if options.anoko is not None:
+        anoko=ANOKOfinder(options.anoko).find()
+    else:
+        anoko=ANOKOfinder().find()
+    if anoko is None:
+        if options.anoko is not None:
+            searchpath=ANOKOfinder(options.anoko).paths
+        else:
+            searchpath=ANOKOfinder().paths
+        logger.warning('Unable to find ANOKO in search path:\n\t%s' % ('\n\t'.join(searchpath)))
+
 
     files=args
     if len(files)==0:
@@ -1630,14 +1763,15 @@ def main():
         logger.error('Unable to create Table for summary data:\n\t%s' % e)
         sys.exit(1)
 
-    try:
-        observation_data_table.write(options.summaryname,
-                                     format=options.summaryformat)
-        logger.info('Summary table written to %s' % options.summaryname)
-    except Exception, e:
-        logger.error('Unable to write summary table %s with format %s:\n%s' % (options.summaryname,
-                                                                               options.summaryformat,
-                                                                               e))
+    if False:
+        try:
+            observation_data_table.write(options.summaryname,
+                                         format=options.summaryformat)
+            logger.info('Summary table written to %s' % options.summaryname)
+        except Exception, e:
+            logger.error('Unable to write summary table %s with format %s:\n%s' % (options.summaryname,
+                                                                                   options.summaryformat,
+                                                                                   e))
         sys.exit(1)
 
     times['end']=time.time()

@@ -1306,11 +1306,11 @@ class Observation(metadata.MWA_Observation):
         e=[None]*ntorun
         i=0
         idone=0
-        while (i<len(commands) and idone<len(commands)):
+        while (i<len(commands) or idone<len(commands)):
             if (None in p):
                 for j in xrange(len(p)):
                     if (p[j] is None and i < len(commands)):
-                        logger.info("Running %s (%d/%d) in %d" % (commands[i],i,len(commands),j))
+                        logger.info("Will run (%d/%d) in %d:\n\t%s" % (i,len(commands),j,commands[i]))
                         op,ep=subprocess.PIPE,subprocess.PIPE
                         p[j]=subprocess.Popen(commands[i], shell=True,
                                               stderr=ep,

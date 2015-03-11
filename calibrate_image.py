@@ -1736,9 +1736,9 @@ def main():
                               help='Process full polarization (including cross terms)?')
     imaging_parser.add_option('--wscleanargs',dest='wsclean_arguments',default='',
                               help='Additional wsclean arguments')
-    imaging_parser.add_option('--subimagetime',dest='subimagetime',default=None,
+    imaging_parser.add_option('--subexptime',dest='subexptime',default=None,
                               type='float',
-                              help='Integration time for sub-images (s) [default=None]')
+                              help='Exposure time for sub-exposures (s) [default=None]')
     parser.add_option('--beam',dest='beammodel',default='2014i',type='choice',
                       choices=['2014i','2014','2013'],
                       help='Primary beam model [default=%default]')
@@ -2096,9 +2096,9 @@ def main():
             logger.debug('Skipping imaging of calibrator observation %s' % observation_data[i]['obsid'])
             continue
 
-        if options.subimagetime is not None and options.subimagetime > 0:
+        if options.subexptime is not None and options.subexptime > 0:
             results=observations[observation_data[i]['obsid']].multiimage_time(
-                imagetime=options.subimagetime,
+                imagetime=options.subexptime,
                 clean_weight=options.clean_weight,
                 imagesize=options.imagesize,
                 pixelscale=options.pixelscale,

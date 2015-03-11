@@ -30,7 +30,7 @@ class MyFormatter(logging.Formatter):
         if record.levelno == logging.WARNING:
             self._fmt = MyFormatter.warning_fmt
 
-        elif record.levelno == logging.ERROR:
+        elif record.levelno >= logging.ERROR:
             self._fmt = MyFormatter.err_fmt
 
         # Call the original formatter class to do the grunt work
@@ -41,18 +41,25 @@ class MyFormatter(logging.Formatter):
 
         return result
     
-
-# configure the logging
-logFormatter=logging.Formatter('# %(asctime)s %(levelname)s:%(name)s: %(message)s')
-logging.basicConfig(format='# %(asctime)s %(levelname)s:%(name)s: %(message)s')
-logger = logging.getLogger('preprocess')
-
 fmt = MyFormatter()
-hdlr = logging.StreamHandler(sys.stdout)
+# set up logging to file - see previous section for more details
+logging.basicConfig(level=logging.DEBUG,
+                    datefmt='%m-%d %H:%M',
+                    filename='calibrate_image.log',
+                    filemode='w')
+# define a Handler which writes INFO messages or higher to the sys.stderr
+console = logging.StreamHandler()
+console.setLevel(logging.WARNING)
+# set a format which is simpler for console use
+# tell the handler to use this format
+formatter = logging.Formatter('%(asctime)-12s: %(levelname)-8s: %(message)s',
+                              datefmt='%Y-%m-%d %H:%M')
 
-hdlr.setFormatter(fmt)
-logger.addHandler(hdlr)
-logger.setLevel(logging.WARNING)
+console.setFormatter(formatter)
+# add the handler to the root logger
+logging.getLogger('').addHandler(console)
+
+logger = logging.getLogger('preprocess')
 
 import mwapy
 from mwapy import metadata
@@ -654,14 +661,16 @@ def main():
                  4: [logging.CRITICAL, 'CRITICAL']}
     logdefault = 2    # WARNING
     level = max(min(logdefault - options.loudness + options.quietness,4),0)
-    logger.setLevel(loglevels[level][0])
-    logger.info('Log level set: messages that are %s or higher will be shown.' % loglevels[level][1])
+    logging.getLogger('').handlers[1].setLevel(loglevels[level][0])
+    #logger.info('Log level set: messages that are %s or higher will be shown.' % loglevels[level][1])
 
 
+    logger.info('**************************************************')
     logger.debug('%s starting at %s UT on host %s with user %s' % (sys.argv[0],
                                                                   datetime.datetime.now(),
                                                                   socket.gethostname(),
                                                                   os.environ['USER']))
+    logger.info('**************************************************')
 
     if len(args)==0:
         if options.starttime is None:
@@ -680,6 +689,7 @@ def main():
     logger.debug('Using AOFlagger version %s' % AOFlaggerversion)
     results=[]
     havecalibrator={}
+
     if not (options.starttime is None and options.stoptime is None):
         GPSstart=parse_time(options.starttime)
         GPSstop=parse_time(options.stoptime)

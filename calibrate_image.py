@@ -4,8 +4,10 @@ Todo:
 -quality metrics:
   - image rms
   - # of sources detected
--selfcal
 -add minuv to CASA calibration
+-sub-integrations
+-sub-bands
+
 
 To debug:
 
@@ -49,7 +51,7 @@ class MyFormatter(logging.Formatter):
         if record.levelno == logging.WARNING:
             self._fmt = MyFormatter.warning_fmt
 
-        elif record.levelno == logging.ERROR:
+        elif record.levelno >= logging.ERROR:
             self._fmt = MyFormatter.err_fmt
 
         # Call the original formatter class to do the grunt work
@@ -60,19 +62,25 @@ class MyFormatter(logging.Formatter):
 
         return result
     
-
-# configure the logging
-logFormatter=logging.Formatter('# %(asctime)s %(levelname)s:%(name)s: %(message)s')
-logging.basicConfig(format='# %(asctime)s %(levelname)s:%(name)s: %(message)s')
-logger = logging.getLogger('calibrate_image')
-
 fmt = MyFormatter()
-hdlr = logging.StreamHandler(sys.stdout)
+# set up logging to file - see previous section for more details
+logging.basicConfig(level=logging.DEBUG,
+                    datefmt='%m-%d %H:%M',
+                    filename='calibrate_image.log',
+                    filemode='w')
+# define a Handler which writes INFO messages or higher to the sys.stderr
+console = logging.StreamHandler()
+console.setLevel(logging.WARNING)
+# set a format which is simpler for console use
+# tell the handler to use this format
+formatter = logging.Formatter('%(asctime)-12s: %(levelname)-8s: %(message)s',
+                              datefmt='%Y-%m-%d %H:%M')
 
-hdlr.setFormatter(fmt)
-logger.addHandler(hdlr)
-logger.setLevel(logging.WARNING)
+console.setFormatter(formatter)
+# add the handler to the root logger
+logging.getLogger('').addHandler(console)
 
+logger = logging.getLogger('calibrate_image')
 
 import mwapy
 from mwapy import metadata
@@ -662,6 +670,8 @@ class Observation(metadata.MWA_Observation):
         self.autoprocesssources='None'
         self.centerchanged=False
         self.selfcal=False
+        self.clean_iterations_selfcal=4000
+        
 
         if os.path.exists(os.path.join(self.basedir,'%s.metafits' % self.obsid)):
             self.metafits=os.path.join(self.basedir,'%s.metafits' % self.obsid)
@@ -1199,6 +1209,8 @@ class Observation(metadata.MWA_Observation):
             f[0].header['PBMODEL']=(self.beammodel,'Primary beam model')
             f.verify('fix')
             f.flush()
+            self.beamfiles.append(expected_beamoutput[j])
+
         return expected_beamoutput
 
     ##############################
@@ -1283,6 +1295,7 @@ class Observation(metadata.MWA_Observation):
             # update header from raw file
             try:
                 fraw=fits.open(self.rawfiles[0])
+                logger.debug('Updating header of %s from %s' % (file, self.rawfiles[0]))
             except Exception,e:
                 logger.error('Unable to open file %s:\n\t%s' % (self.rawfiles[0],e))
 
@@ -1290,6 +1303,7 @@ class Observation(metadata.MWA_Observation):
                 if not k in f[0].header.keys():
                     f[0].header[k]=(fraw[0].header[k],
                                     fraw[0].header.comments[k])
+                    logger.debug('Updating %s[%s]=%s' % (file,k,fraw[0].header[k]))
             f.verify('fix')
             f.flush()
 
@@ -1394,9 +1408,9 @@ def main():
                       type='int',
                       help='Percentage of total RAM to be used [default=%default]')   
     parser.add_option('--casapy',dest='casapy',default=None,
-                      help='Path to CASAPY directory [default=%default]')
+                      help='Path to CASAPY directory (can override with $CASAPY) [default=%default]')
     parser.add_option('--anoko',dest='anoko',default=None,
-                      help='Path to anoko/mwa-reduce executable directory (calibrate, applysolutions) [default=%default]')
+                      help='Path to anoko/mwa-reduce executable directory (calibrate, applysolutions) (can override with $ANOKO) [default=%default]')
     parser.add_option("-v", "--verbose", dest="loudness", default=0, action="count",
                       help="Each -v option produces more informational/debugging output")
     parser.add_option("-q", "--quiet", dest="quietness", default=0, action="count",
@@ -1415,8 +1429,16 @@ def main():
                  4: [logging.CRITICAL, 'CRITICAL']}
     logdefault = 2    # WARNING
     level = max(min(logdefault - options.loudness + options.quietness,4),0)
-    logger.setLevel(loglevels[level][0])
-    logger.info('Log level set: messages that are %s or higher will be shown.' % loglevels[level][1])
+    logging.getLogger('').handlers[1].setLevel(loglevels[level][0])
+    #logger.info('Log level set: messages that are %s or higher will be shown.' % loglevels[level][1])
+
+    logger.info('**************************************************')
+    logger.debug('%s starting at %s UT on host %s with user %s' % (sys.argv[0],
+                                                                  datetime.datetime.now(),
+                                                                  socket.gethostname(),
+                                                                  os.environ['USER']))
+    logger.info('**************************************************')
+
 
     ##################################################
     # figure out where CASA lives
@@ -1562,6 +1584,11 @@ def main():
         observation_data[i]['calibrator']=cal_observations[observation_data[i]['obsid']]
         observations[observation_data[i]['obsid']].calibrator=cal_observations[observation_data[i]['obsid']]
     times['init']=time.time()
+    
+    logger.warning('Warn')
+    logger.error('error')
+
+    sys.exit(1)
 
     ##################################################
     # generate calibration solutions
@@ -1629,7 +1656,7 @@ def main():
                 clean_weight=options.clean_weight,
                 imagesize=options.imagesize,
                 pixelscale=options.pixelscale,
-                clean_iterations=4000,
+                clean_iterations=observations[observation_data[i]['obsid']].clean_iterations_selfcal,
                 clean_gain=options.clean_gain,
                 clean_mgain=options.clean_mgain,
                 clean_minuv=options.clean_minuv,
@@ -1695,6 +1722,10 @@ def main():
                 sys.exit(1)
             observation_data[i]['calibratorfile']=observations[observation_data[i]['obsid']].calibratorfile
             observations[observation_data[i]['obsid']].selfcal=True
+
+            observations[observation_data[i]['obsid']].rawfiles=[]
+            observations[observation_data[i]['obsid']].beamfiles=[]
+            observations[observation_data[i]['obsid']].corrfiles=[]
 
     ##################################################
     # imaging

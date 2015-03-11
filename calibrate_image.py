@@ -1126,6 +1126,7 @@ class Observation(metadata.MWA_Observation):
             f[0].header['AUTOPEEL']=self.autoprocesssources
             f[0].header['CHGCENTR']=self.centerchanged
             f[0].header['SELFCAL']=self.selfcal
+            f[0].header.add_history(self.wscleancommand)
             try:
                 fm=fits.open(self.metafits)
             except Exception,e:
@@ -1360,6 +1361,7 @@ class Observation(metadata.MWA_Observation):
                 f[0].header['AUTOPEEL']=self.autoprocesssources
                 f[0].header['CHGCENTR']=self.centerchanged
                 f[0].header['SELFCAL']=self.selfcal
+                f[0].header.add_history(commands[i])
                 try:
                     fm=fits.open(self.metafits)
                 except Exception,e:
@@ -1367,7 +1369,9 @@ class Observation(metadata.MWA_Observation):
                                                                         e))
                     return None
                 for k in fm[0].header.keys():
-                    try:
+                    if k in ['DATE-OBS']:
+                        continue
+                    try:                        
                         f[0].header[k]=(fm[0].header[k],
                                         fm[0].header.comments[k])
                     except:

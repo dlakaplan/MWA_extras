@@ -45,7 +45,7 @@ fmt = MyFormatter()
 # set up logging to file - see previous section for more details
 logging.basicConfig(level=logging.DEBUG,
                     datefmt='%m-%d %H:%M',
-                    filename='calibrate_image.log',
+                    filename='preprocess.log',
                     filemode='w')
 # define a Handler which writes INFO messages or higher to the sys.stderr
 console = logging.StreamHandler()

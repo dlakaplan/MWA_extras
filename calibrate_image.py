@@ -1588,7 +1588,6 @@ def main():
     logger.warning('Warn')
     logger.error('error')
 
-    sys.exit(1)
 
     ##################################################
     # generate calibration solutions

@@ -44,20 +44,21 @@ class MyFormatter(logging.Formatter):
 fmt = MyFormatter()
 # set up logging to file - see previous section for more details
 logging.basicConfig(level=logging.DEBUG,
-                    datefmt='%m-%d %H:%M',
-                    filename='preprocess.log',
-                    filemode='w')
+                    datefmt='%Y-%m-%d %H:%M:%S',
+                    filename='/dev/null')
+
+
 # define a Handler which writes INFO messages or higher to the sys.stderr
 console = logging.StreamHandler()
 console.setLevel(logging.WARNING)
-# set a format which is simpler for console use
-# tell the handler to use this format
-formatter = logging.Formatter('%(asctime)-12s: %(levelname)-8s: %(message)s',
-                              datefmt='%Y-%m-%d %H:%M')
-
-console.setFormatter(formatter)
+console.setFormatter(fmt)
 # add the handler to the root logger
 logging.getLogger('').addHandler(console)
+
+filehandler = logging.FileHandler('calibrate_image.log')
+filehandler.setLevel(logging.DEBUG)
+filehandler.setFormatter(fmt)
+logging.getLogger('').addHandler(filehandler)
 
 logger = logging.getLogger('preprocess')
 
@@ -666,7 +667,7 @@ def main():
 
 
     logger.info('**************************************************')
-    logger.debug('%s starting at %s UT on host %s with user %s' % (sys.argv[0],
+    logger.info('%s starting at %s UT on host %s with user %s' % (sys.argv[0],
                                                                   datetime.datetime.now(),
                                                                   socket.gethostname(),
                                                                   os.environ['USER']))

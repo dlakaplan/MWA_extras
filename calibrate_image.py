@@ -65,20 +65,21 @@ class MyFormatter(logging.Formatter):
 fmt = MyFormatter()
 # set up logging to file - see previous section for more details
 logging.basicConfig(level=logging.DEBUG,
-                    datefmt='%m-%d %H:%M',
-                    filename='calibrate_image.log',
-                    filemode='w')
+                    datefmt='%Y-%m-%d %H:%M:%S',
+                    filename='/dev/null')
+
+
 # define a Handler which writes INFO messages or higher to the sys.stderr
 console = logging.StreamHandler()
 console.setLevel(logging.WARNING)
-# set a format which is simpler for console use
-# tell the handler to use this format
-formatter = logging.Formatter('%(asctime)-12s: %(levelname)-8s: %(message)s',
-                              datefmt='%Y-%m-%d %H:%M')
-
-console.setFormatter(formatter)
+console.setFormatter(fmt)
 # add the handler to the root logger
 logging.getLogger('').addHandler(console)
+
+filehandler = logging.FileHandler('calibrate_image.log')
+filehandler.setLevel(logging.DEBUG)
+filehandler.setFormatter(fmt)
+logging.getLogger('').addHandler(filehandler)
 
 logger = logging.getLogger('calibrate_image')
 
@@ -1294,16 +1295,14 @@ class Observation(metadata.MWA_Observation):
 
             # update header from raw file
             try:
-                fraw=fits.open(self.rawfiles[0])
-                logger.debug('Updating header of %s from %s' % (file, self.rawfiles[0]))
+                fraw=fits.open(self.rawfiles[-1])
             except Exception,e:
-                logger.error('Unable to open file %s:\n\t%s' % (self.rawfiles[0],e))
+                logger.error('Unable to open file %s:\n\t%s' % (self.rawfiles[-1],e))
 
             for k in fraw[0].header.keys():
                 if not k in f[0].header.keys():
                     f[0].header[k]=(fraw[0].header[k],
                                     fraw[0].header.comments[k])
-                    logger.debug('Updating %s[%s]=%s' % (file,k,fraw[0].header[k]))
             f.verify('fix')
             f.flush()
 
@@ -1433,7 +1432,7 @@ def main():
     #logger.info('Log level set: messages that are %s or higher will be shown.' % loglevels[level][1])
 
     logger.info('**************************************************')
-    logger.debug('%s starting at %s UT on host %s with user %s' % (sys.argv[0],
+    logger.info('%s starting at %s UT on host %s with user %s' % (sys.argv[0],
                                                                   datetime.datetime.now(),
                                                                   socket.gethostname(),
                                                                   os.environ['USER']))
@@ -1585,10 +1584,6 @@ def main():
         observations[observation_data[i]['obsid']].calibrator=cal_observations[observation_data[i]['obsid']]
     times['init']=time.time()
     
-    logger.warning('Warn')
-    logger.error('error')
-
-
     ##################################################
     # generate calibration solutions
     ##################################################

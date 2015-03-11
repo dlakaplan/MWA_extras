@@ -5,7 +5,6 @@ Todo:
   - image rms
   - # of sources detected
 -add minuv to CASA calibration
--sub-integrations
 -sub-bands
 
 
@@ -29,6 +28,8 @@ import collections,glob,numpy
 from astropy.io import fits
 from astropy.coordinates import SkyCoord
 from astropy import units as u
+from fcntl import fcntl, F_GETFL, F_SETFL
+from os import O_NONBLOCK, read
 
 ##############################
 # Custom formatter
@@ -90,6 +91,7 @@ try:
     import drivecasa
     _CASA=True
 except ImportError:
+    logger.error('Unable to import drivecasa')
     _CASA=False
 
 
@@ -123,6 +125,30 @@ brightsources={'3C353': SkyCoord('17h20m28.1s','-00d58m47s'),
                'PKSJ0130-2610': SkyCoord('01h30m27.8s','-26d09m56s'),
                'VirA': SkyCoord('12h30m49.4s','12d23m28s')}
 
+def getstatus(p, output=None, error=None):
+    """
+    pollresults=getstatus(p, output=None, error=None)
+    p is a list of subprocess instances
+    this checks if they are finished
+    and returns a list of False if still running or True if stopped
+    """
+    poll=[]
+    for j in xrange(len(p)):
+        try:
+            poll.append(p[j].poll() is not None)
+        except:
+            poll.append(None)
+        if output is not None:
+            try:
+                output[j].flush()
+            except:
+                pass
+        if error is not None:
+            try:
+                error[j].flush()
+            except:
+                pass
+    return poll
 ##################################################
 class CASAfinder():
     """
@@ -672,7 +698,7 @@ class Observation(metadata.MWA_Observation):
         self.centerchanged=False
         self.selfcal=False
         self.clean_iterations_selfcal=4000
-        
+        self.nimages=1
 
         if os.path.exists(os.path.join(self.basedir,'%s.metafits' % self.obsid)):
             self.metafits=os.path.join(self.basedir,'%s.metafits' % self.obsid)
@@ -1138,6 +1164,239 @@ class Observation(metadata.MWA_Observation):
         else:
             return True
 
+
+    ##############################
+    def multiimage_time(self, 
+                        suffix=None,
+                        imagetime=2,
+                        clean_weight='uniform',
+                        imagesize=2048,
+                        pixelscale=0.015,
+                        clean_iterations=100,
+                        clean_gain=0.1,
+                        clean_mgain=1.0,
+                        clean_minuv=0,
+                        clean_maxuv=0,
+                        fullpolarization=True,
+                        wsclean_arguments='',
+                        updateheader=True,
+                        ntorun=8):
+        """
+        multiimage_time(self, 
+                        suffix=None,
+                        imagetime=2,
+                        clean_weight='uniform',
+                        imagesize=2048,
+                        pixelscale=0.015,
+                        clean_iterations=100,
+                        clean_gain=0.1,
+                        clean_mgain=1.0,
+                        clean_minuv=0,
+                        clean_maxuv=0,
+                        fullpolarization=True,
+                        wsclean_arguments='',
+                        updateheader=True,
+                        ntorun=8)
+        images with wsclean
+        creates output like <obsid>_<suffix>_t<i>-<j>-<pol>-image.fits
+        does this for many sub-images in parallel
+        returns the list of files on success, None on failure
+        
+        other files (model, etc) are put into list of files to delete
+        sets:
+        self.clean_weight
+        self.imagesize
+        self.pixelscale
+        self.clean_iterations
+        self.clean_gain
+        self.clean_mgain
+        self.clean_minuv
+        self.clean_maxuv
+        self.fullpolarization
+        self.wsclean_arguments
+
+        will update the header of the output if desired to include info from 
+        this task and from metafits
+
+        """
+        self.clean_weight=clean_weight
+        self.imagesize=imagesize
+        self.pixelscale=pixelscale
+        self.clean_iterations=clean_iterations
+        self.clean_gain=clean_gain
+        self.clean_mgain=clean_mgain
+        self.clean_minuv=clean_minuv
+        self.clean_maxuv=clean_maxuv
+        self.fullpolarization=fullpolarization
+        self.wsclean_arguments=wsclean_arguments
+
+        if suffix is not None:
+            name0='%s_%s' % (self.obsid,suffix)
+        else:
+            name0=str(self.obsid)
+        name0=os.path.join(self.basedir, name0)
+        
+        if imagetime < self.inttime:
+            logger.warning('Requested image time of %.1f s is < integration time of %.1f s; setting to integration time' % (imagetime,
+                                                                                                                            self.inttime))
+            imagetime=self.inttime
+
+        # determine number of images to make
+        nimages = int(self.duration / imagetime)
+        self.nimages=nimages
+        integrationsperimage=int(imagetime/self.inttime)
+        logger.info('Will make %d images of %.1f s each' % (nimages, imagetime))
+        commands=[]
+        expected_outputs=[]
+        for i in xrange(nimages):
+            expected_output=[]
+            startindex=i*integrationsperimage
+            stopindex=(i+1)*integrationsperimage
+            if stopindex > int(self.duration / self.inttime):
+                stopindex=int(self.duration / self.inttime)
+            name='%s_t%03d-%03d' % (name0, startindex, stopindex)
+
+            wscleancommand=['wsclean',
+                            '-j',
+                            str(self.ncpus/ntorun),
+                            '-mem',
+                            str(self.memfraction/ntorun),
+                            '-weight',
+                            self.clean_weight,
+                            '-size',
+                            '%d %d'% (self.imagesize,self.imagesize),
+                            '-scale',
+                            '%.4fdeg' % self.pixelscale,
+                            '-interval',
+                            '%d %d' % (startindex, stopindex)]
+            if self.clean_iterations>0:
+                wscleancommand+=['-niter',
+                                 str(self.clean_iterations),
+                                 '-gain',
+                                 str(self.clean_gain),
+                                 '-mgain',
+                                 str(self.clean_mgain)]
+            wscleancommand+=['-name',
+                             name]
+            if self.clean_minuv > 0:
+                wscleancommand.append('-minuv-l')
+                wscleancommand.append(str(self.clean_minuv))
+            if self.clean_maxuv > 0:
+                wscleancommand.append('-maxuv-l')
+                wscleancommand.append(str(self.clean_maxuv))
+            if self.fullpolarization:
+                wscleancommand.append('-pol')
+                wscleancommand.append('xx,xy,yx,yy')
+                for pol in ['XX','YY','XY','XYi']:
+                    expected_output.append('%s-%s-image.fits' % (name,pol)) 
+            else:
+                wscleancommand.append('-pol')
+                wscleancommand.append('xx,yy')
+                for pol in ['XX','YY']:
+                    expected_output.append('%s-%s-image.fits' % (name,pol)) 
+            if len(self.wsclean_arguments)>0:
+                wscleancommand+=self.wsclean_arguments.split()
+            wscleancommand.append('%s.ms' % self.obsid)
+            commands.append(' '.join(wscleancommand))
+            expected_outputs.append(expected_output)
+
+        p=[None]*ntorun
+        o=[None]*ntorun
+        e=[None]*ntorun
+        i=0
+        idone=0
+        while (i<len(commands) and idone<len(commands)):
+            if (None in p):
+                for j in xrange(len(p)):
+                    if (p[j] is None and i < len(commands)):
+                        logger.info("Running %s (%d/%d) in %d" % (commands[i],i,len(commands),j))
+                        op,ep=subprocess.PIPE,subprocess.PIPE
+                        p[j]=subprocess.Popen(commands[i], shell=True,
+                                              stderr=ep,
+                                              stdout=op,
+                                              close_fds=True)
+                        i+=1
+            poll=getstatus(p,output=o,error=e)
+
+            while (not (any(poll))):
+                time.sleep(5)
+                poll=getstatus(p,output=o,error=e)
+
+            for j in xrange(len(p)):
+                if (poll[j]):
+                    idone+=1
+                    logger.info("\t%d finished" % j)
+                    p[j]=None
+
+        for i in xrange(len(expected_outputs)):
+            expected_output=expected_outputs[i]
+            for j in xrange(len(expected_output)):
+                file=expected_output[j]
+                if not os.path.exists(file):
+                    logger.error('Expected wsclean output %s does not exist' % file)
+                    return None
+                logger.info('Created wsclean output %s' % file)
+                # add other output to cleanup list
+                for ext in ['dirty','model','residual']:
+                    self.filestodelete.append(file.replace('-image','-%s' % ext))
+
+                self.rawfiles.append(file)
+
+                if not updateheader:
+                    continue
+                try:
+                    f=fits.open(file,'update')
+                except Exception,e:
+                    logger.open('Unable to open image output %s for updating:\n\t%s' % (file,e))
+                    return None
+
+                f[0].header['CALTYPE']=(self.caltype,'Calibration type')
+                #f[0].header['CALIBRAT']=(observation_data[i]['calibrator'],
+                #                         'Calibrator observation')
+                f[0].header['CALFILE']=(self.calibratorfile,
+                                        'Calibrator file')
+                f[0].header['CALMINUV']=(self.calminuv,
+                                         '[m] Min UV for calibration')
+                f[0].header['AUTOPEEL']=self.autoprocesssources
+                f[0].header['CHGCENTR']=self.centerchanged
+                f[0].header['SELFCAL']=self.selfcal
+                try:
+                    fm=fits.open(self.metafits)
+                except Exception,e:
+                    logger.open('Unable to open metafits file %s:\n\t%s' % (self.metafits,
+                                                                        e))
+                    return None
+                for k in fm[0].header.keys():
+                    try:
+                        f[0].header[k]=(fm[0].header[k],
+                                        fm[0].header.comments[k])
+                    except:
+                        pass
+
+                prev_inttime=f[0].header['INTTIME']
+                prev_finechan=f[0].header['FINECHAN']
+                f[0].header['INTTIME']=(self.inttime,'[s] Integration time')
+                f[0].header['FINECHAN']=(self.chanwidth,'[kHz] Fine channel width')
+                f[0].header['NSCANS']=int(integrationsperimage)
+                f[0].header['EXPOSURE']=(integrationsperimage*self.inttime,'[s] duration of observation')
+                if prev_finechan != f[0].header['FINECHAN']:
+                    f[0].header['NCHANS']=int(f[0].header['NCHANS']*prev_finechan/f[0].header['FINECHAN'])
+                    logger.info('New final channel (%d kHz) differs from previous fine channel (%d kHz): changing number of channels to %d' % (f[0].header['FINECHAN'],
+                                                                                                                                               prev_finechan,
+                                                                                                                                               f[0].header['NCHANS']))
+                    
+            
+                f.verify('fix')
+                f.flush()
+
+        return self.rawfiles
+
+
+
+
+
+
+
     ##############################
     def makepb(self, suffix=None, beammodel='2014i'):
         """
@@ -1226,6 +1485,8 @@ class Observation(metadata.MWA_Observation):
         
         returns list of corrected images on success, None on failure
         """
+
+
         if suffix is not None:
             name='%s_%s' % (self.obsid,suffix)
         else:
@@ -1314,6 +1575,101 @@ class Observation(metadata.MWA_Observation):
 
             
         return self.corrfiles
+
+    ##############################
+    def multipbcorrect_time(self, suffix=None):
+        """
+        pbcorrect(self, suffix=None)
+        primary beam correct using anoko/pbcorrect
+
+        creates output like <obsid>_<suffix>-<pol>.fits
+        if doing fullpol, will make all Stokes
+        otherwise Q,U,V get put into list of files to delete
+        
+        returns list of corrected images on success, None on failure
+        """
+        
+        for i in xrange(self.nimages):
+            if suffix is not None:
+                name='%s_%s' % (self.obsid,suffix)
+            else:
+                name=str(self.obsid)            
+            beamname=os.path.join(self.basedir,'beam-%s' % name)
+            if self.fullpolarization:
+                rawfile=self.rawfiles[i*4]
+            else:
+                rawfile=self.rawfiles[i*2]
+            name=rawfile.replace('-XX-image.fits','')
+            imagetype='image.fits'
+
+            pbcorrectcommand=['pbcorrect']
+            pbcorrectcommand+=[name,
+                               imagetype,
+                               beamname,
+                               name]
+            expected_pbcorroutput=[]
+            if self.fullpolarization:
+                for pol in ['I','Q','U','V']:
+                    expected_pbcorroutput.append('%s-%s.fits' % (name,
+                                                                 pol))
+            else:
+                for pol in ['I']:
+                    expected_pbcorroutput.append('%s-%s.fits' % (name,
+                                                                 pol))
+
+            logger.info('Will run:\n\t%s' % ' '.join(pbcorrectcommand))
+            p=subprocess.Popen(' '.join(pbcorrectcommand),
+                               stderr=subprocess.PIPE,
+                               stdout=subprocess.PIPE,
+                               shell=True,
+                               close_fds=False)
+            while True:
+                p.stdout.flush()
+                p.stderr.flush()
+                for l in p.stdout.readlines():
+                    logger.debug(l.rstrip())
+                for l in p.stderr.readlines():
+                    logger.error(l.rstrip())
+                returncode=p.poll()
+                if returncode is not None:
+                    break
+                time.sleep(1)
+
+            for j in xrange(len(expected_pbcorroutput)):
+                if not os.path.exists(expected_pbcorroutput[j]):
+                    logger.error('Expected pbcorrect output %s does not exist' % expected_pbcorroutput[j])
+                    return None
+                logger.info('Created pbcorrect output %s' % expected_pbcorroutput[j])
+                self.corrfiles.append(expected_pbcorroutput[j])
+                file=expected_pbcorroutput[j]
+                try:
+                    f=fits.open(file,'update')
+                except Exception,e:
+                    logger.open('Unable to open image output %s for updating:\n\t%s' % (file,e))
+                    return None
+                f[0].header['PBMODEL']=(self.beammodel,'Primary beam model')
+
+                # update header from raw file
+                try:
+                    fraw=fits.open(rawfile)
+                except Exception,e:
+                    logger.error('Unable to open file %s:\n\t%s' % (rawfile,e))
+                    
+                for k in fraw[0].header.keys():
+                    if not k in f[0].header.keys():
+                        f[0].header[k]=(fraw[0].header[k],
+                                        fraw[0].header.comments[k])
+                f.verify('fix')
+                f.flush()
+
+            if not self.fullpolarization:
+                for pol in ['Q','U','V']:
+                    if os.path.exists('%s-%s.fits' % (name,pol)):
+                        self.filestodelete.append('%s-%s.fits' % (name,pol))
+
+
+            
+        return self.corrfiles
             
 
 ##################################################                              
@@ -1350,32 +1706,35 @@ def main():
                               help='Run selfcal?')    
     control_parser.add_option('--autosize',default=1,type='float',
                               help='Maximum possible size increase factor to include a bright source [default=%default]')
-    imaging_parser.add_option('--size',dest='imagesize',default=2048,type='int',
-                      help='Image size in pixels [default=%default]')
+    imaging_parser.add_option('--size','--imagesize',dest='imagesize',default=2048,type='int',
+                              help='Image size in pixels [default=%default]')
     imaging_parser.add_option('--scale',dest='pixelscale',default=0.015,type='float',
-                      help='Pixel scale in deg [default=%default]')
+                              help='Pixel scale in deg [default=%default]')
     imaging_parser.add_option('--niter',dest='clean_iterations',default=100,
-                      type='int',
-                      help='Clean iterations [default=%default]')
+                              type='int',
+                              help='Clean iterations [default=%default]')
     imaging_parser.add_option('--mgain',dest='clean_mgain',default=1,
-                      type='float',
-                      help='Clean major cycle gain [default=%default]')
+                              type='float',
+                              help='Clean major cycle gain [default=%default]')
     imaging_parser.add_option('--gain',dest='clean_gain',default=0.1,
-                      type='float',
-                      help='Clean gain [default=%default]')
+                              type='float',
+                              help='Clean gain [default=%default]')
     imaging_parser.add_option('--weight',dest='clean_weight',default='uniform',
-                      help='Clean weighting [default=%default]')
+                              help='Clean weighting [default=%default]')
     imaging_parser.add_option('--minuv',dest='clean_minuv',default=0,
-                      type='float',
-                      help='Minimum UV distance in wavelengths [default=%default]')
+                              type='float',
+                              help='Minimum UV distance in wavelengths [default=%default]')
     imaging_parser.add_option('--maxuv',dest='clean_maxuv',default=0,
-                      type='float',
-                      help='Maximum UV distance in wavelengths [default=%default]')
+                              type='float',
+                              help='Maximum UV distance in wavelengths [default=%default]')
     imaging_parser.add_option('--fullpol',dest='fullpolarization',default=False,
                       action='store_true',
-                      help='Process full polarization (including cross terms)?')
+                              help='Process full polarization (including cross terms)?')
     imaging_parser.add_option('--wscleanargs',dest='wsclean_arguments',default='',
-                      help='Additional wsclean arguments')
+                              help='Additional wsclean arguments')
+    imaging_parser.add_option('--subimagetime',dest='subimagetime',default=None,
+                              type='float',
+                              help='Integration time for sub-images (s) [default=None]')
     parser.add_option('--beam',dest='beammodel',default='2014i',type='choice',
                       choices=['2014i','2014','2013'],
                       help='Primary beam model [default=%default]')
@@ -1406,6 +1765,9 @@ def main():
     parser.add_option('--memory',dest='memfraction',default=50,
                       type='int',
                       help='Percentage of total RAM to be used [default=%default]')   
+    parser.add_option('--nprocess',dest='nprocess',default=8,
+                      type='int',
+                      help='Number of possible subprocesses to run [default=%default]')   
     parser.add_option('--casapy',dest='casapy',default=None,
                       help='Path to CASAPY directory (can override with $CASAPY) [default=%default]')
     parser.add_option('--anoko',dest='anoko',default=None,
@@ -1436,6 +1798,7 @@ def main():
                                                                   datetime.datetime.now(),
                                                                   socket.gethostname(),
                                                                   os.environ['USER']))
+    logger.debug('Command was:\n\t%s' % command)
     logger.info('**************************************************')
 
 
@@ -1728,19 +2091,39 @@ def main():
         if observations[observation_data[i]['obsid']].calibration and options.nocal:
             logger.debug('Skipping imaging of calibrator observation %s' % observation_data[i]['obsid'])
             continue
-        results=observations[observation_data[i]['obsid']].image(
-            clean_weight=options.clean_weight,
-            imagesize=options.imagesize,
-            pixelscale=options.pixelscale,
-            clean_iterations=options.clean_iterations,
-            clean_gain=options.clean_gain,
-            clean_mgain=options.clean_mgain,
-            clean_minuv=options.clean_minuv,
-            clean_maxuv=options.clean_maxuv,
-            fullpolarization=options.fullpolarization,
-            wsclean_arguments=options.wsclean_arguments)
-        if results is None:
-            sys.exit(1)
+
+        if options.subimagetime is not None and options.subimagetime > 0:
+            results=observations[observation_data[i]['obsid']].multiimage_time(
+                imagetime=options.subimagetime,
+                clean_weight=options.clean_weight,
+                imagesize=options.imagesize,
+                pixelscale=options.pixelscale,
+                clean_iterations=options.clean_iterations,
+                clean_gain=options.clean_gain,
+                clean_mgain=options.clean_mgain,
+                clean_minuv=options.clean_minuv,
+                clean_maxuv=options.clean_maxuv,
+                fullpolarization=options.fullpolarization,
+                wsclean_arguments=options.wsclean_arguments,
+                ntorun=options.nprocess)
+            if results is None:
+                sys.exit(1)
+
+        else:
+            results=observations[observation_data[i]['obsid']].image(
+                clean_weight=options.clean_weight,
+                imagesize=options.imagesize,
+                pixelscale=options.pixelscale,
+                clean_iterations=options.clean_iterations,
+                clean_gain=options.clean_gain,
+                clean_mgain=options.clean_mgain,
+                clean_minuv=options.clean_minuv,
+                clean_maxuv=options.clean_maxuv,
+                fullpolarization=options.fullpolarization,
+                wsclean_arguments=options.wsclean_arguments)
+            if results is None:
+                sys.exit(1)
+
         for j in xrange(len(results)):
             file=results[j]
             try:
@@ -1755,7 +2138,7 @@ def main():
             f[0].header['COTTRVER']=(observation_data[i]['ms_cotterversion'],'Cotter version')
             f[0].header.add_history(command)
             f.flush()
-            observation_data[i]['rawimages'][j]=results[j]
+            #observation_data[i]['rawimages'][j]=results[j]
 
         observation_data[i]['clean_iterations']=options.clean_iterations
         observation_data[i]['clean_weight']=options.clean_weight
@@ -1767,16 +2150,23 @@ def main():
         observation_data[i]['clean_maxuv']=options.clean_maxuv
         observation_data[i]['fullpolarization']=options.fullpolarization
         observation_data[i]['wsclean_arguments']=options.wsclean_arguments
-        observation_data[i]['wsclean_command']=' '.join(observations[observation_data[i]['obsid']].wscleancommand)
+        #observation_data[i]['wsclean_command']=' '.join(observations[observation_data[i]['obsid']].wscleancommand)
 
         results=observations[observation_data[i]['obsid']].makepb(beammodel=options.beammodel)
         if results is None:
             sys.exit(1)
         observation_data[i]['beammodel']=options.beammodel
 
-        results=observations[observation_data[i]['obsid']].pbcorrect()
-        if results is None:
-            sys.exit(1)
+        if observations[observation_data[i]['obsid']].nimages==1:
+            results=observations[observation_data[i]['obsid']].pbcorrect()
+            if results is None:
+                sys.exit(1)
+        else:
+            results=observations[observation_data[i]['obsid']].multipbcorrect_time()
+            if results is None:
+                sys.exit(1)
+
+
         # for j in xrange(len(results)):
         #    observation_data[i]['corrimages'][j]=results[j]
 

@@ -1986,7 +1986,7 @@ def main():
             os.mkdir(options.out)
         except Exception,e:
             logger.error('Problem making output directory %s:\n\t%s' % (options.out,e))
-            sys.exit(1)
+            sys.exit(1)            
     for i in xrange(len(files)):
         file=files[i]
         obsid=int(file.split('.')[0])
@@ -2026,6 +2026,9 @@ def main():
             if distance > 0.9*(options.imagesize/2)*options.pixelscale*u.degree and distance < options.autosize*(options.imagesize/2)*options.pixelscale*u.degree:
                 logger.warning('Source %s is %.1f deg from field center but outside imaged area; recommend increasing imaged area' % (source,distance.value))
                 increasesize=True
+
+        #logger.info('%d\t%d\t%.2f\t%.2f\t%d\t%.1f' % (observation_data[i]['obsid']
+
     if increasesize and options.autosize>1:
         logger.warning('Increasing imaged area to %dx%d (%.1f deg)' % (options.imagesize*options.autosize,
                                                                        options.imagesize*options.autosize,
@@ -2318,7 +2321,7 @@ def main():
 
     try:
         observation_data_table.write(options.summaryname,
-                                     delimiter=' | ',
+                                     delimiter='|',
                                      format=options.summaryformat)
         logger.info('Summary table written to %s' % options.summaryname)
     except Exception, e:

@@ -5,11 +5,11 @@ Todo:
   - image rms
   - # of sources detected
 -add minuv to CASA calibration
--sub-bands
+-sub-bands & sub-exposures together
 
 
 To debug:
-
+-table output
 -table output of null strings
 -table output of filenames
 
@@ -290,6 +290,7 @@ def get_msinfo(msfile):
              'ms=casac.casac.ms()',
              'ms.open("%s")' % msfile,
              'print "chanwidth=%d" % (ms.getspectralwindowinfo()["0"]["ChanWidth"]/1e3)',
+             'print "nchans=%d" % (ms.getspectralwindowinfo()["0"]["NumChan"])',
              'print "inttime=%f" % (ms.getscansummary()["1"]["0"]["IntegrationTime"])',
              't=casac.casac.table()',
              't.open("%s")' % msfile,
@@ -303,17 +304,20 @@ def get_msinfo(msfile):
         return None
     chanwidth=None
     inttime=None
+    nchans=None
     otherkeys={}
     for l in result[0]:
         if 'chanwidth' in l:
             chanwidth=float(l.split('=')[1])
         elif 'inttime' in l:
             inttime=float(l.split('=')[1])
+        elif 'nchans' in l:
+            nchans=int(l.split('=')[1])
         elif '=' in l:
             k,v=l.split('=')
             otherkeys[k]=v
 
-    return chanwidth, inttime, otherkeys
+    return chanwidth, inttime, nchans, otherkeys
     
 ##################################################
 def check_calibrated(msfile):
@@ -696,6 +700,7 @@ class Observation(metadata.MWA_Observation):
         self.calminuv=None
         self.inttime=0
         self.chanwidth=0
+        self.nchans=0
         self.otherkeys={}
         self.autoprocesssources='None'
         self.centerchanged=False
@@ -712,7 +717,7 @@ class Observation(metadata.MWA_Observation):
 
         if not os.path.exists('%s.ms' % self.obsid):
             logger.error('MS file %s.ms does not exist' % self.obsid)
-        self.chanwidth, self.inttime, self.otherkeys=get_msinfo('%s.ms' % self.obsid)
+        self.chanwidth, self.inttime, self.nchans, self.otherkeys=get_msinfo('%s.ms' % self.obsid)
         self.filestodelete=[]
 
     ##############################
@@ -982,6 +987,7 @@ class Observation(metadata.MWA_Observation):
               clean_maxuv=0,
               fullpolarization=True,
               wsclean_arguments='',
+              subbands=1,
               updateheader=True):
         """
         image(prefict=False,
@@ -1045,6 +1051,9 @@ class Observation(metadata.MWA_Observation):
                         '%d %d'% (self.imagesize,self.imagesize),
                         '-scale',
                         '%.4fdeg' % self.pixelscale]
+        if subbands > 1:
+            wscleancommand+=['-channelsout',
+                             str(subbands)]
         if self.clean_iterations>0:
             wscleancommand+=['-niter',
                              str(self.clean_iterations),
@@ -1068,16 +1077,36 @@ class Observation(metadata.MWA_Observation):
             wscleancommand.append('xx,xy,yx,yy')
             if not predict:
                 wscleancommand.append('-joinpolarizations')
-            for pol in ['XX','YY','XY','XYi']:
-                expected_output.append('%s-%s-image.fits' % (name,pol))
         else:
             wscleancommand.append('-pol')
             wscleancommand.append('xx,yy')
-            for pol in ['XX','YY']:
-                expected_output.append('%s-%s-image.fits' % (name,pol))
         if len(self.wsclean_arguments)>0:
             wscleancommand+=self.wsclean_arguments.split()
         wscleancommand.append('%s.ms' % self.obsid)
+        
+        if subbands==1:
+            if self.fullpolarization:
+                for pol in ['XX','YY','XY','XYi']:
+                    expected_output.append('%s-%s-image.fits' % (name,pol))
+            else:
+                for pol in ['XX','YY']:
+                    expected_output.append('%s-%s-image.fits' % (name,pol))                
+        else:
+            for subband in xrange(subbands):
+                if self.fullpolarization:
+                    for pol in ['XX','YY','XY','XYi']:
+                        expected_output.append('%s-%04d-%s-image.fits' % (name,subband,pol))
+                else:
+                    for pol in ['XX','YY']:
+                        expected_output.append('%s-%04d-%s-image.fits' % (name,subband,pol))                
+            if self.fullpolarization:
+                for pol in ['XX','YY','XY','XYi']:
+                    expected_output.append('%s-MFS-%s-image.fits' % (name,pol))
+            else:
+                for pol in ['XX','YY']:
+                    expected_output.append('%s-MFS-%s-image.fits' % (name,pol))                
+            
+
         if predict:
             expected_output=[]
 
@@ -1129,7 +1158,10 @@ class Observation(metadata.MWA_Observation):
             f[0].header['AUTOPEEL']=self.autoprocesssources
             f[0].header['CHGCENTR']=self.centerchanged
             f[0].header['SELFCAL']=self.selfcal
-            f[0].header.add_history(self.wscleancommand)
+            try:
+                f[0].header.add_history(' '.join(self.wscleancommand))
+            except:
+                f[0].header.add_history(self.wscleancommand)
             try:
                 fm=fits.open(self.metafits)
             except Exception,e:
@@ -1157,8 +1189,17 @@ class Observation(metadata.MWA_Observation):
                 logger.info('New final channel (%d kHz) differs from previous fine channel (%d kHz): changing number of channels to %d' % (f[0].header['FINECHAN'],
                                                                                                                                            prev_finechan,
                                                                                                                                            f[0].header['NCHANS']))
-                
-            
+            if subbands > 1:
+                try:
+                    startchannel=f[0].header['WSCCHANS']
+                    stopchannel=f[0].header['WSCCHANE']
+                    f[0].header['NCHANS']=(int(stopchannel-startchannel), 'Number of fine channels in spectrum')
+                    f[0].header['BANDWDTH']=((stopchannel-startchannel)*self.chanwidth/1e3, 
+                                             '[MHz] Total bandwidth')
+                    
+                    f[0].header['FREQCENT']=f[0].header['FREQCENT']+(self.chanwidth/1e3)*((stopchannel-startchannel)/2-self.nchans/2)
+                except:
+                    pass
             f.verify('fix')
             f.flush()
 
@@ -1391,7 +1432,6 @@ class Observation(metadata.MWA_Observation):
                     logger.info('New final channel (%d kHz) differs from previous fine channel (%d kHz): changing number of channels to %d' % (f[0].header['FINECHAN'],
                                                                                                                                                prev_finechan,
                                                                                                                                                f[0].header['NCHANS']))
-                    
             
                 f.verify('fix')
                 f.flush()
@@ -1405,9 +1445,9 @@ class Observation(metadata.MWA_Observation):
 
 
     ##############################
-    def makepb(self, suffix=None, beammodel='2014i'):
+    def makepb(self, suffix=None, ifile=0, beammodel='2014i'):
         """
-        makepb(self, suffix=None, beammodel='2014i')
+        makepb(self, suffix=None, ifile=0, beammodel='2014i')
         make primary beam using anoko/beam
         
         creates files like beam-<obsid>_<suffix>-<pol>.fits
@@ -1416,10 +1456,10 @@ class Observation(metadata.MWA_Observation):
         """
         assert beammodel in ['2013','2014','2014i']
 
+        name=self.rawfiles[ifile].replace('-XX-image.fits','')
+        name=os.path.split(name)[1]
         if suffix is not None:
-            name='%s_%s' % (self.obsid,suffix)
-        else:
-            name=str(self.obsid)
+            name+='_%s' % suffix
         beamname=os.path.join(self.basedir,'beam-%s' % name)
         name=os.path.join(self.basedir, name)
 
@@ -1429,7 +1469,7 @@ class Observation(metadata.MWA_Observation):
                      '-name',
                      beamname,
                      '-proto',
-                     self.rawfiles[0],
+                     self.rawfiles[ifile],
                      '-ms',
                      '%s.ms' % self.obsid]
         
@@ -1481,9 +1521,9 @@ class Observation(metadata.MWA_Observation):
         return expected_beamoutput
 
     ##############################
-    def pbcorrect(self, suffix=None, model=False, uncorrect=False):
+    def pbcorrect(self, suffix=None, model=False, uncorrect=False, ifile=-1):
         """
-        pbcorrect(self, suffix=None, model=False, uncorrect=False)
+        pbcorrect(self, suffix=None, model=False, uncorrect=False, ifile=-1)
         primary beam correct using anoko/pbcorrect
 
         creates output like <obsid>_<suffix>-<pol>.fits
@@ -1494,11 +1534,10 @@ class Observation(metadata.MWA_Observation):
         """
 
 
+        name=self.rawfiles[ifile].replace('-XX-image.fits','')
+        name=os.path.split(name)[1]
         if suffix is not None:
-            name='%s_%s' % (self.obsid,suffix)
-        else:
-            name=str(self.obsid)
-            
+            name+='_%s' % suffix
         beamname=os.path.join(self.basedir,'beam-%s' % name)
         name=os.path.join(self.basedir, name)
         if not model:
@@ -1563,9 +1602,9 @@ class Observation(metadata.MWA_Observation):
 
             # update header from raw file
             try:
-                fraw=fits.open(self.rawfiles[-1])
+                fraw=fits.open(self.rawfiles[ifile])
             except Exception,e:
-                logger.error('Unable to open file %s:\n\t%s' % (self.rawfiles[-1],e))
+                logger.error('Unable to open file %s:\n\t%s' % (self.rawfiles[ifile],e))
 
             for k in fraw[0].header.keys():
                 if not k in f[0].header.keys():
@@ -1735,13 +1774,16 @@ def main():
                               type='float',
                               help='Maximum UV distance in wavelengths [default=%default]')
     imaging_parser.add_option('--fullpol',dest='fullpolarization',default=False,
-                      action='store_true',
+                              action='store_true',
                               help='Process full polarization (including cross terms)?')
     imaging_parser.add_option('--wscleanargs',dest='wsclean_arguments',default='',
                               help='Additional wsclean arguments')
     imaging_parser.add_option('--subexptime',dest='subexptime',default=None,
                               type='float',
                               help='Exposure time for sub-exposures (s) [default=None]')
+    imaging_parser.add_option('--subbands',dest='subbands',default=1,
+                              type='int',
+                              help='Number of subbands to image [default=%default]')
     parser.add_option('--beam',dest='beammodel',default='2014i',type='choice',
                       choices=['2014i','2014','2013'],
                       help='Primary beam model [default=%default]')
@@ -1808,6 +1850,10 @@ def main():
     logger.debug('Command was:\n\t%s' % command)
     logger.info('**************************************************')
 
+
+    if options.subbands > 1 and options.subexptime is not None:
+        logger.error('Cannot do subbands>1 and subexptime<total together')
+        sys.exit(1)
 
     ##################################################
     # figure out where CASA lives
@@ -2100,6 +2146,7 @@ def main():
             continue
 
         if options.subexptime is not None and options.subexptime > 0:
+            # make multiple images for different subexposures
             results=observations[observation_data[i]['obsid']].multiimage_time(
                 imagetime=options.subexptime,
                 clean_weight=options.clean_weight,
@@ -2127,10 +2174,11 @@ def main():
                 clean_minuv=options.clean_minuv,
                 clean_maxuv=options.clean_maxuv,
                 fullpolarization=options.fullpolarization,
+                subbands=options.subbands,
                 wsclean_arguments=options.wsclean_arguments)
             if results is None:
                 sys.exit(1)
-
+                    
         for j in xrange(len(results)):
             file=results[j]
             try:
@@ -2159,21 +2207,37 @@ def main():
         observation_data[i]['wsclean_arguments']=options.wsclean_arguments
         #observation_data[i]['wsclean_command']=' '.join(observations[observation_data[i]['obsid']].wscleancommand)
 
-        results=observations[observation_data[i]['obsid']].makepb(beammodel=options.beammodel)
-        if results is None:
-            sys.exit(1)
+        if options.subbands==1:
+            results=observations[observation_data[i]['obsid']].makepb(beammodel=options.beammodel)
+            if results is None:
+                sys.exit(1)
+        else:
+            for subband in xrange(options.subbands+1):
+                filesperband=2+2*options.fullpolarization
+                results=observations[observation_data[i]['obsid']].makepb(beammodel=options.beammodel,
+                                                                          ifile=subband*filesperband)
+                if results is None:
+                    sys.exit(1)
         observation_data[i]['beammodel']=options.beammodel
 
         if observations[observation_data[i]['obsid']].nimages==1:
-            results=observations[observation_data[i]['obsid']].pbcorrect()
-            if results is None:
-                sys.exit(1)
+            if options.subbands==1:
+                results=observations[observation_data[i]['obsid']].pbcorrect()
+                if results is None:
+                    sys.exit(1)
+            else:
+                for subband in xrange(options.subbands+1):
+                    filesperband=2+2*options.fullpolarization
+                    results=observations[observation_data[i]['obsid']].pbcorrect(ifile=subband*filesperband)
+                    if results is None:
+                        sys.exit(1)
+ 
         else:
             results=observations[observation_data[i]['obsid']].multipbcorrect_time()
             if results is None:
                 sys.exit(1)
 
-
+        sys.exit(1)
         # for j in xrange(len(results)):
         #    observation_data[i]['corrimages'][j]=results[j]
 

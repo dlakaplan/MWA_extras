@@ -2305,7 +2305,6 @@ def main():
             if results is None:
                 sys.exit(1)
 
-        sys.exit(1)
         # for j in xrange(len(results)):
         #    observation_data[i]['corrimages'][j]=results[j]
 
@@ -2319,7 +2318,7 @@ def main():
 
     try:
         observation_data_table.write(options.summaryname,
-                                     delimiter='|',
+                                     delimiter=' | ',
                                      format=options.summaryformat)
         logger.info('Summary table written to %s' % options.summaryname)
     except Exception, e:

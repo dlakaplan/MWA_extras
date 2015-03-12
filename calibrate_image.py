@@ -87,15 +87,22 @@ except ImportError:
     logger.error('Unable to import drivecasa')
     _CASA=False
 
+##################################################
+# default search paths for CASAPY and ANOKO/mwa-reduce
+# the CASAPY path should be the directory (i.e., it should contain the casapy executable)
+# the ANOKO path should contain calibrate and applysolutions
+##################################################
+casapypath=['/usr/local/casapy','/usr/physics/mwa/casa']
+anokopath=['~kaplan/mwa/anoko/mwa-reduce/build/', 
+           '/usr/physics/mwa/pkg/anoko/mwa-reduce/build/']
+
+
 
 catalogdir=os.path.join(os.path.split(os.path.abspath(__file__))[0],'catalogs')
 calmodelfile=os.path.join(catalogdir,'model_a-team.txt')
 anokocatalog=os.path.join(catalogdir,'model-catalogue_new.txt')
 casapy=None
 anoko=None
-casapypath=['/usr/local/casapy','/usr/physics/mwa/casa']
-anokopath=['~kaplan/mwa/anoko/mwa-reduce/build/', 
-           '/usr/physics/mwa/pkg/anoko/mwa-reduce/build/']
 
 if not os.path.exists(calmodelfile):
     logger.warning('Unable to find calibrator model file %s' % calmodelfile)
@@ -624,8 +631,8 @@ def identify_calibrators(observation_data):
     calibrators=numpy.where(observation_data['iscalibrator'])[0]
     notcalibrators=numpy.where(~observation_data['iscalibrator'])[0]
     if len(calibrators)==0:
-        logger.error('No calibrators identified')
-        return None
+        logger.warning('No calibrators identified')
+        return calibrators, notcalibrators, {}
     
     cal_observations={}
     for i in notcalibrators:
@@ -819,6 +826,11 @@ class Observation(metadata.MWA_Observation):
         if self.caltype=='casa' and selfcal:
             logger.error('Cannot do selfcal with CASA calibration')
             return False
+        if not selfcal:
+            if check_calibrated('%s.ms' % self.obsid) and not recalibrate:
+                logger.info('%s.ms is already calibrated and recalibrate is False' % self.obsid)
+                return True
+
         if not os.path.exists(self.calibratorfile):
             logger.error('Cannot find calibration file %s for observation %s' % (self.calibratorfile,
                                                                                  self.obsid))
@@ -826,10 +838,6 @@ class Observation(metadata.MWA_Observation):
         logger.info('Will calibrate %s.ms with %s' % (self.obsid,
                                                       self.calibratorfile))
 
-        if not selfcal:
-            if check_calibrated('%s.ms' % self.obsid) and not recalibrate:
-                logger.info('%s.ms is already calibrated and recalibrate is False' % self.obsid)
-                return True
         if self.caltype=='anoko':
             if not selfcal:
                 result=applycal_anoko(self.obsid,self.calibratorfile)
@@ -985,6 +993,7 @@ class Observation(metadata.MWA_Observation):
               clean_mgain=1.0,
               clean_minuv=0,
               clean_maxuv=0,
+              clean_threshold=0,
               fullpolarization=True,
               wsclean_arguments='',
               subbands=1,
@@ -1000,8 +1009,10 @@ class Observation(metadata.MWA_Observation):
               clean_mgain=1.0,
               clean_minuv=0,
               clean_maxuv=0,
+              clean_threshold=0,
               fullpolarization=True,
               wsclean_arguments='',
+              subbands=1,
               updateheader=True)
         images with wsclean
         creates output like <obsid>_<suffix>-<pol>-image.fits
@@ -1017,6 +1028,7 @@ class Observation(metadata.MWA_Observation):
         self.clean_mgain
         self.clean_minuv
         self.clean_maxuv
+        self.clean_threshold
         self.fullpolarization
         self.wsclean_arguments
 
@@ -1034,6 +1046,7 @@ class Observation(metadata.MWA_Observation):
         self.clean_maxuv=clean_maxuv
         self.fullpolarization=fullpolarization
         self.wsclean_arguments=wsclean_arguments
+        self.clean_threshold=clean_threshold
 
         if suffix is not None:
             name='%s_%s' % (self.obsid,suffix)
@@ -1051,6 +1064,9 @@ class Observation(metadata.MWA_Observation):
                         '%d %d'% (self.imagesize,self.imagesize),
                         '-scale',
                         '%.4fdeg' % self.pixelscale]
+        if clean_threshold is not None and clean_threshold > 0:
+            wscleancommand+=['-threshold',
+                             str(clean_threshold/1e3)]
         if subbands > 1:
             wscleancommand+=['-channelsout',
                              str(subbands)]
@@ -1222,6 +1238,7 @@ class Observation(metadata.MWA_Observation):
                         clean_mgain=1.0,
                         clean_minuv=0,
                         clean_maxuv=0,
+                        clean_threshold=0,
                         fullpolarization=True,
                         wsclean_arguments='',
                         updateheader=True,
@@ -1267,6 +1284,7 @@ class Observation(metadata.MWA_Observation):
         self.clean_weight=clean_weight
         self.imagesize=imagesize
         self.pixelscale=pixelscale
+        self.clean_threshold=clean_threshold
         self.clean_iterations=clean_iterations
         self.clean_gain=clean_gain
         self.clean_mgain=clean_mgain
@@ -1314,6 +1332,9 @@ class Observation(metadata.MWA_Observation):
                             '%.4fdeg' % self.pixelscale,
                             '-interval',
                             '%d %d' % (startindex, stopindex)]
+            if clean_threshold is not None and clean_threshold > 0:
+                wscleancommand+=['-threshold',
+                                 str(clean_threshold/1e3)]
             if self.clean_iterations>0:
                 wscleancommand+=['-niter',
                                  str(self.clean_iterations),
@@ -1344,6 +1365,7 @@ class Observation(metadata.MWA_Observation):
             wscleancommand.append('%s.ms' % self.obsid)
             commands.append(' '.join(wscleancommand))
             expected_outputs.append(expected_output)
+            self.wscleancommand=wscleancommand
 
         p=[None]*ntorun
         o=[None]*ntorun
@@ -1456,7 +1478,10 @@ class Observation(metadata.MWA_Observation):
         """
         assert beammodel in ['2013','2014','2014i']
 
-        name=self.rawfiles[ifile].replace('-XX-image.fits','')
+        name=self.rawfiles[ifile].replace('-XX-image.fits','').replace('-XX-image.fits','').replace('-XY-image.fits','').replace('-XYi-image.fits','').replace('-YY-image.fits','')
+        if '.fits' in name:
+            logger.error('Cannot construct name base from output %s' % self.rawfiles[ifile])
+            return None
         name=os.path.split(name)[1]
         if suffix is not None:
             name+='_%s' % suffix
@@ -1521,9 +1546,9 @@ class Observation(metadata.MWA_Observation):
         return expected_beamoutput
 
     ##############################
-    def pbcorrect(self, suffix=None, model=False, uncorrect=False, ifile=-1):
+    def pbcorrect(self, suffix=None, model=False, uncorrect=False, ifile=0):
         """
-        pbcorrect(self, suffix=None, model=False, uncorrect=False, ifile=-1)
+        pbcorrect(self, suffix=None, model=False, uncorrect=False, ifile=0)
         primary beam correct using anoko/pbcorrect
 
         creates output like <obsid>_<suffix>-<pol>.fits
@@ -1534,7 +1559,10 @@ class Observation(metadata.MWA_Observation):
         """
 
 
-        name=self.rawfiles[ifile].replace('-XX-image.fits','')
+        name=self.rawfiles[ifile].replace('-XX-image.fits','').replace('-XY-image.fits','').replace('-XYi-image.fits','').replace('-YY-image.fits','')
+        if '.fits' in name:
+            logger.error('Cannot construct name base from output %s' % self.rawfiles[ifile])
+            return None
         name=os.path.split(name)[1]
         if suffix is not None:
             name+='_%s' % suffix
@@ -1759,6 +1787,9 @@ def main():
     imaging_parser.add_option('--niter',dest='clean_iterations',default=100,
                               type='int',
                               help='Clean iterations [default=%default]')
+    imaging_parser.add_option('--threshold',dest='clean_threshold',default=0,
+                              type='float',
+                              help='Clean threshold (mJy) [default=%default]')
     imaging_parser.add_option('--mgain',dest='clean_mgain',default=1,
                               type='float',
                               help='Clean major cycle gain [default=%default]')
@@ -1917,11 +1948,15 @@ def main():
                                         ('ms_mwapyversion','a20'),
                                         ('iscalibrator',numpy.bool),
                                         ('channel','i4'),
-                                        ('calibrator','i4'),
+                                        ('calibrator','i4'),                                        
                                         ('caltype','a10'),
                                         ('calibratorsource','a20'),
                                         ('calibratorfile','a30'),
                                         ('calminuv','f4'),
+                                        ('chgcentre',numpy.bool),
+                                        ('autoprocess',numpy.bool),
+                                        ('selfcal',numpy.bool),
+                                        ('clean_threshold','i4'),
                                         ('clean_iterations','i4'),
                                         ('imagesize','i4'),
                                         ('pixelscale','f4'),
@@ -1931,6 +1966,10 @@ def main():
                                         ('clean_gain','f4'),
                                         ('clean_mgain','f4'),
                                         ('fullpolarization',numpy.bool),
+                                        ('subbands','i4'),
+                                        ('subband_bandwidth','f4'),
+                                        ('subexposures','i4'),
+                                        ('exposure_time','f4'),
                                         ('wsclean_arguments','a60'),
                                         ('wsclean_command','a200'),
                                         ('rawimages','a30',(6,)),               
@@ -1996,8 +2035,12 @@ def main():
 
     calibrators, notcalibrators, cal_observations=identify_calibrators(observation_data)
     for i in notcalibrators:
-        observation_data[i]['calibrator']=cal_observations[observation_data[i]['obsid']]
-        observations[observation_data[i]['obsid']].calibrator=cal_observations[observation_data[i]['obsid']]
+        try:
+            observation_data[i]['calibrator']=cal_observations[observation_data[i]['obsid']]
+            observations[observation_data[i]['obsid']].calibrator=cal_observations[observation_data[i]['obsid']]
+        except:
+            observation_data[i]['calibrator']=-1
+            observations[observation_data[i]['obsid']].calibrator=-1
     times['init']=time.time()
     
     ##################################################
@@ -2016,10 +2059,14 @@ def main():
     ##################################################
     for i in xrange(len(observation_data)):
         if not observation_data[i]['iscalibrator']:
-            cal_touse=numpy.where(observation_data[i]['calibrator']==observation_data['obsid'])[0][0]
+            try:
+                cal_touse=numpy.where(observation_data[i]['calibrator']==observation_data['obsid'])[0][0]
+            except:
+                cal_touse=-1
         else:
             cal_touse=i
-        observations[observation_data[i]['obsid']].calibratorfile=observations[observation_data[cal_touse]['obsid']].calibratorfile
+        if cal_touse>=0:
+            observations[observation_data[i]['obsid']].calibratorfile=observations[observation_data[cal_touse]['obsid']].calibratorfile
         
         result=observations[observation_data[i]['obsid']].calibrate(recalibrate=options.recalibrate)
         if result is False or result is None:
@@ -2038,6 +2085,7 @@ def main():
                 continue
             results=observations[observation_data[i]['obsid']].autoprocess(imagesize=options.imagesize,
                                                                        pixelscale=options.pixelscale)
+            observation_data[i]['autoprocess']=True
     times['autoprocess']=time.time()                       
 
     ##################################################
@@ -2049,6 +2097,7 @@ def main():
                 logger.debug('Skipping chgcentre of calibrator observation %s' % observation_data[i]['obsid'])
                 continue
             results=observations[observation_data[i]['obsid']].chgcentre()
+            observation_data[i]['chgcentre']=True
     times['chgcentre']=time.time()                       
 
 
@@ -2071,6 +2120,7 @@ def main():
                 clean_mgain=options.clean_mgain,
                 clean_minuv=options.clean_minuv,
                 clean_maxuv=options.clean_maxuv,
+                clean_threshold=options.clean_threshold,
                 fullpolarization=True,
                 wsclean_arguments='-stopnegative',
                 updateheader=False)
@@ -2080,16 +2130,14 @@ def main():
             observations[observation_data[i]['obsid']].filestodelete+=results
                 
             # determine the primary beam
-            results=observations[observation_data[i]['obsid']].makepb(suffix='selfcal',
-                                                                      beammodel=options.beammodel)
+            results=observations[observation_data[i]['obsid']].makepb(beammodel=options.beammodel)
             # we don't want these in the end
             observations[observation_data[i]['obsid']].filestodelete+=results
                                                                       
             if results is None:
                 sys.exit(1)
             # correct the model image
-            results=observations[observation_data[i]['obsid']].pbcorrect(suffix='selfcal',
-                                                                         model=True)
+            results=observations[observation_data[i]['obsid']].pbcorrect(model=True)
             # we don't want these in the end
             observations[observation_data[i]['obsid']].filestodelete+=results
 
@@ -2100,8 +2148,7 @@ def main():
                 if '-Q' in result or '-U' in result or '-V' in result:
                     os.remove(result)
             # uncorrect the beam
-            results=observations[observation_data[i]['obsid']].pbcorrect(suffix='selfcal',
-                                                                         model=True,
+            results=observations[observation_data[i]['obsid']].pbcorrect(model=True,
                                                                          uncorrect=True)
             if results is None:
                 sys.exit(1)
@@ -2119,6 +2166,7 @@ def main():
                 clean_mgain=options.clean_mgain,
                 clean_minuv=options.clean_minuv,
                 clean_maxuv=options.clean_maxuv,
+                clean_threshold=options.clean_threshold,
                 fullpolarization=True,
                 updateheader=False)
 
@@ -2136,6 +2184,10 @@ def main():
             observations[observation_data[i]['obsid']].rawfiles=[]
             observations[observation_data[i]['obsid']].beamfiles=[]
             observations[observation_data[i]['obsid']].corrfiles=[]
+            observation_data[i]['selfcal']=True
+
+    times['selfcal']=time.time()                       
+
 
     ##################################################
     # imaging
@@ -2163,6 +2215,11 @@ def main():
             if results is None:
                 sys.exit(1)
 
+            if options.fullpolarization:
+                observation_data[i]['subexposures']=len(results)/4
+            else:
+                observation_data[i]['subexposures']=len(results)/2
+
         else:
             results=observations[observation_data[i]['obsid']].image(
                 clean_weight=options.clean_weight,
@@ -2178,7 +2235,9 @@ def main():
                 wsclean_arguments=options.wsclean_arguments)
             if results is None:
                 sys.exit(1)
-                    
+            
+            observation_data[i]['subbands']=options.subbands
+
         for j in xrange(len(results)):
             file=results[j]
             try:
@@ -2186,6 +2245,11 @@ def main():
             except Exception,e:
                 logger.open('Unable to open image output %s for updating:\n\t%s' % (file,e))
                 sys.exit(1)
+
+            if j==0 and observation_data[i]['subbands']>1:
+                observation_data[i]['subband_bandwidth']=f[0].header['BANDWDTH']
+            if j==0:
+                observation_data[i]['exposure_time']=f[0].header['EXPOSURE']
 
             f[0].header['CASAVER']=(casapyversion,'CASAPY version')
             f[0].header['MWAPYVER']=(mwapy.__version__,'MWAPY version')
@@ -2196,6 +2260,7 @@ def main():
             #observation_data[i]['rawimages'][j]=results[j]
 
         observation_data[i]['clean_iterations']=options.clean_iterations
+        observation_data[i]['clean_threshold']=options.clean_threshold
         observation_data[i]['clean_weight']=options.clean_weight
         observation_data[i]['clean_gain']=options.clean_gain
         observation_data[i]['clean_mgain']=options.clean_mgain
@@ -2205,7 +2270,10 @@ def main():
         observation_data[i]['clean_maxuv']=options.clean_maxuv
         observation_data[i]['fullpolarization']=options.fullpolarization
         observation_data[i]['wsclean_arguments']=options.wsclean_arguments
-        #observation_data[i]['wsclean_command']=' '.join(observations[observation_data[i]['obsid']].wscleancommand)
+        try:
+            observation_data[i]['wsclean_command']=' '.join(observations[observation_data[i]['obsid']].wscleancommand)
+        except:
+            pass
 
         if options.subbands==1:
             results=observations[observation_data[i]['obsid']].makepb(beammodel=options.beammodel)
@@ -2249,17 +2317,16 @@ def main():
         logger.error('Unable to create Table for summary data:\n\t%s' % e)
         sys.exit(1)
 
-    if False:
-        try:
-            observation_data_table.write(options.summaryname,
-                                         format=options.summaryformat)
-            logger.info('Summary table written to %s' % options.summaryname)
-        except Exception, e:
-            logger.error('Unable to write summary table %s with format %s:\n%s' % (options.summaryname,
-                                                                                   options.summaryformat,
-                                                                                   e))
-        sys.exit(1)
-
+    try:
+        observation_data_table.write(options.summaryname,
+                                     delimiter='|',
+                                     format=options.summaryformat)
+        logger.info('Summary table written to %s' % options.summaryname)
+    except Exception, e:
+        logger.error('Unable to write summary table %s with format %s:\n%s' % (options.summaryname,
+                                                                               options.summaryformat,
+                                                                               e))
+            
     times['end']=time.time()
 
 
@@ -2267,13 +2334,14 @@ def main():
     observations[observation_data[i]['obsid']].filestodelete+=glob.glob('casapy-*.log')
     observations[observation_data[i]['obsid']].filestodelete+=glob.glob('ipython-*.log')
 
-    logger.info('Execution time: %d s (setup), %d s (make cal), %d s (apply cal), %d s (autoprocess), %d s (chgcentre), %d s (image) %d s (tidy) = %d s (total)' % (
+    logger.info('Execution time: %d s (setup), %d s (make cal), %d s (apply cal), %d s (autoprocess), %d s (chgcentre), %d s (selfcal), %d s (image) %d s (tidy) = %d s (total)' % (
         times['init']-times['start'],
         times['makecal']-times['init'],
         times['applycal']-times['makecal'],
         times['autoprocess']-times['applycal'],        
         times['chgcentre']-times['autoprocess'],        
-        times['image']-times['chgcentre'],        
+        times['selfcal']-times['chgcentre'],        
+        times['image']-times['selfcal'],        
         times['end']-times['image'],
         times['end']-times['start']))
 

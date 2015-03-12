@@ -4,7 +4,6 @@ Todo:
 -quality metrics:
   - image rms
   - # of sources detected
--add minuv to CASA calibration
 -sub-bands & sub-exposures together
 
 
@@ -383,9 +382,10 @@ def getcasaversion():
 
 
 ##################################################
-def calibrate_casa(obsid, directory=None):
+def calibrate_casa(obsid, directory=None, minuv=60):
     """
-    calibrate_casa(obsid)
+    calibrate_casa(obsid, directory=None, minuv=60)
+    minuv in meters
     returns name of calibration (gain) file on success
     returns None on failure
     """
@@ -402,8 +402,13 @@ def calibrate_casa(obsid, directory=None):
         logger.error('Unable to instantiate casa:\n%s' % e)
         return None
 
-    command=['from mwapy import ft_beam',
-             """ft_beam.ft_beam(vis='%s.ms')""" % obsid]
+    if minuv is not None:
+        command=['from mwapy import ft_beam',
+                 """ft_beam.ft_beam(vis='%s.ms',uvrange='>%dmeters')""" % (obsid,minuv)]
+    else:
+        command=['from mwapy import ft_beam',
+                 """ft_beam.ft_beam(vis='%s.ms')""" % (obsid)]
+
     logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
     result=casa.run_script(command)
     if len(result[1])>0:
@@ -797,7 +802,8 @@ class Observation(metadata.MWA_Observation):
 
             self.calminuv=minuv
         elif self.caltype=='casa':        
-            result=calibrate_casa(self.obsid, directory=self.basedir)
+            result=calibrate_casa(self.obsid, directory=self.basedir, minuv=minuv)
+            self.calminuv=minuv
         if result is not None:
             self.calibratorfile=result
             logger.info('Wrote %s' % self.calibratorfile)

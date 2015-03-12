@@ -1773,7 +1773,7 @@ def main():
     imaging_parser.add_option('--maxuv',dest='clean_maxuv',default=0,
                               type='float',
                               help='Maximum UV distance in wavelengths [default=%default]')
-    imaging_parser.add_option('--fullpol',dest='fullpolarization',default=False,
+    imaging_parser.add_option('--fullpol','--fullpolarization',dest='fullpolarization',default=False,
                               action='store_true',
                               help='Process full polarization (including cross terms)?')
     imaging_parser.add_option('--wscleanargs',dest='wsclean_arguments',default='',

@@ -100,6 +100,9 @@ calmodelfile=os.path.join(catalogdir,'model_a-team.txt')
 anokocatalog=os.path.join(catalogdir,'model-catalogue_new.txt')
 casapy=None
 anoko=None
+casapypath=['/usr/local/casapy','/usr/physics/mwa/casa']
+anokopath=['~kaplan/mwa/anoko/mwa-reduce/build/', 
+           '/usr/physics/mwa/pkg/anoko/mwa-reduce/build/']
 
 if not os.path.exists(calmodelfile):
     logger.warning('Unable to find calibrator model file %s' % calmodelfile)
@@ -154,7 +157,7 @@ class CASAfinder():
     """
     casapy=CASAfinder(<directories>).find()
     """
-    path=['/usr/local/casapy']
+    path=casapypath
 
     def __init__(self, *args):
         """
@@ -199,7 +202,7 @@ class CASAfinder():
 class ANOKOfinder():
     """
     """
-    path=['~kaplan/mwa/anoko/mwa-reduce/build/']
+    path=anokopath
 
     def __init__(self, *args):
         """

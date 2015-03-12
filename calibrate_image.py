@@ -14,21 +14,15 @@ To debug:
 
 """
 
-import logging,datetime,math,sys,socket,os,json,shutil,io
+import logging,datetime,math,sys,socket,os,shutil,io
 from optparse import OptionParser,OptionGroup
-import threading
-import urllib2, urllib
-import base64
 import time
-import collections
 import subprocess
 from astropy.table import Table,Column
 import collections,glob,numpy
 from astropy.io import fits
 from astropy.coordinates import SkyCoord
 from astropy import units as u
-from fcntl import fcntl, F_GETFL, F_SETFL
-from os import O_NONBLOCK, read
 
 ##############################
 # Custom formatter

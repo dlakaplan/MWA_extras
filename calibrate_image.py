@@ -6,7 +6,6 @@ Todo:
   - # of sources detected
 -sub-bands & sub-exposures together
 
-
 To debug:
 -table output
 -table output of null strings
@@ -14,7 +13,7 @@ To debug:
 
 """
 
-import logging,datetime,math,sys,socket,os,shutil,io
+import logging,logging.handlers,datetime,math,sys,socket,os,shutil,io
 from optparse import OptionParser,OptionGroup
 import time
 import subprocess
@@ -70,9 +69,12 @@ console.setFormatter(fmt)
 # add the handler to the root logger
 logging.getLogger('').addHandler(console)
 
-filehandler = logging.FileHandler('calibrate_image.log')
+#filehandler = logging.FileHandler('calibrate_image.log')
+filehandler = logging.handlers.RotatingFileHandler('calibrate_image.log',
+                                                   backupCount=10)
 filehandler.setLevel(logging.DEBUG)
 filehandler.setFormatter(fmt)
+filehandler.doRollover()
 logging.getLogger('').addHandler(filehandler)
 
 logger = logging.getLogger('calibrate_image')

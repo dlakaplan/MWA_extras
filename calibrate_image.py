@@ -10,6 +10,7 @@ To debug:
 -table output
 -table output of null strings
 -table output of filenames
+-output of CASA calibrator file in a different directory
 
 """
 
@@ -154,6 +155,41 @@ def getstatus(p, output=None, error=None):
             except:
                 pass
     return poll
+##################################################
+def stat_measure(image, fraction=0.5):
+    """
+    median, rms = stat_measure(image, fraction=0.5)
+    uses the central fraction of the image to compute
+    the median and rms (using inner-quartile range)
+    """
+
+    if fraction>1:
+        fraction=1
+    if isinstance(image,str):
+        try:
+            f=fits.open(image)
+        except Exception,e:
+            logger.error('Unable to open FITS image %s:\n\t%s' % (image,e))
+            return None,None
+    else:
+        f=image
+
+    if 'RA' in f[0].header['CTYPE1']:
+        data=f[0].data
+    else:
+        data=f[0].data.T
+    # now it should be Stokes, Freq, Dec, RA
+    ny,nx=data.shape[2],data.shape[3]
+    ytouse=ny*fraction
+    ystart=(ny/2)-ytouse/2
+    ystop=(ny/2)+ytouse/2
+    xtouse=nx*fraction
+    xstart=(nx/2)-xtouse/2
+    xstop=(nx/2)+xtouse/2
+    d=(data[:,:,ystart:ystop,xstart:xstop]).flatten()
+    q1,m,q2=numpy.percentile(d, [25,50,75])
+    return m,(q2-q1)/1.35
+
 ##################################################
 class CASAfinder():
     """
@@ -407,7 +443,7 @@ def calibrate_casa(obsid, directory=None, minuv=60):
 
     if minuv is not None:
         command=['from mwapy import ft_beam',
-                 """ft_beam.ft_beam(vis='%s.ms',uvrange='>%dmeters')""" % (obsid,minuv)]
+                 """ft_beam.ft_beam(vis='%s.ms',uvrange='>%dm')""" % (obsid,minuv)]
     else:
         command=['from mwapy import ft_beam',
                  """ft_beam.ft_beam(vis='%s.ms')""" % (obsid)]
@@ -715,6 +751,7 @@ class Observation(metadata.MWA_Observation):
         self.selfcal=False
         self.clean_iterations_selfcal=4000
         self.nimages=1
+        self.clean_threshold=None
 
         if os.path.exists(os.path.join(self.basedir,'%s.metafits' % self.obsid)):
             self.metafits=os.path.join(self.basedir,'%s.metafits' % self.obsid)
@@ -1068,7 +1105,7 @@ class Observation(metadata.MWA_Observation):
                         '%.4fdeg' % self.pixelscale]
         if clean_threshold is not None and clean_threshold > 0:
             wscleancommand+=['-threshold',
-                             str(clean_threshold/1e3)]
+                             str(clean_threshold)]
         if subbands > 1:
             wscleancommand+=['-channelsout',
                              str(subbands)]
@@ -1176,6 +1213,8 @@ class Observation(metadata.MWA_Observation):
             f[0].header['AUTOPEEL']=self.autoprocesssources
             f[0].header['CHGCENTR']=self.centerchanged
             f[0].header['SELFCAL']=self.selfcal
+            med,rms=stat_measure(f)
+            f[0].header['IMAGERMS']=(rms,'[Jy/beam] Image RMS')
             try:
                 f[0].header.add_history(' '.join(self.wscleancommand))
             except:
@@ -1257,6 +1296,7 @@ class Observation(metadata.MWA_Observation):
                         clean_mgain=1.0,
                         clean_minuv=0,
                         clean_maxuv=0,
+                        clean_threshold=0,
                         fullpolarization=True,
                         wsclean_arguments='',
                         updateheader=True,
@@ -1278,6 +1318,7 @@ class Observation(metadata.MWA_Observation):
         self.clean_maxuv
         self.fullpolarization
         self.wsclean_arguments
+        self.clean_threshold
 
         will update the header of the output if desired to include info from 
         this task and from metafits
@@ -1336,7 +1377,7 @@ class Observation(metadata.MWA_Observation):
                             '%d %d' % (startindex, stopindex)]
             if clean_threshold is not None and clean_threshold > 0:
                 wscleancommand+=['-threshold',
-                                 str(clean_threshold/1e3)]
+                                 str(clean_threshold)]
             if self.clean_iterations>0:
                 wscleancommand+=['-niter',
                                  str(self.clean_iterations),
@@ -1429,6 +1470,9 @@ class Observation(metadata.MWA_Observation):
                 f[0].header['AUTOPEEL']=self.autoprocesssources
                 f[0].header['CHGCENTR']=self.centerchanged
                 f[0].header['SELFCAL']=self.selfcal
+                med,rms=stat_measure(f)
+                f[0].header['IMAGERMS']=(rms,'[Jy/beam] Image RMS')
+
                 f[0].header.add_history(commands[i])
                 try:
                     fm=fits.open(self.metafits)
@@ -1636,6 +1680,8 @@ class Observation(metadata.MWA_Observation):
             except Exception,e:
                 logger.error('Unable to open file %s:\n\t%s' % (self.rawfiles[ifile],e))
 
+            med,rms=stat_measure(f)
+            f[0].header['IMAGERMS']=(rms,'[Jy/beam] Image RMS')
             for k in fraw[0].header.keys():
                 if not k in f[0].header.keys():
                     f[0].header[k]=(fraw[0].header[k],
@@ -1777,6 +1823,9 @@ def main():
     control_parser.add_option('--chgcentre',dest='chgcentre',default=False,
                               action='store_true',
                               help='Run chgcentre?')
+    control_parser.add_option('--quick',dest='quick',default=False,
+                              action='store_true',
+                              help='Run quick initial clean?')    
     control_parser.add_option('--selfcal',dest='selfcal',default=False,
                               action='store_true',
                               help='Run selfcal?')    
@@ -1791,7 +1840,10 @@ def main():
                               help='Clean iterations [default=%default]')
     imaging_parser.add_option('--threshold',dest='clean_threshold',default=0,
                               type='float',
-                              help='Clean threshold (mJy) [default=%default]')
+                              help='Clean threshold (Jy) [default=%default]')
+    imaging_parser.add_option('--thresholdsigma',dest='clean_threshold_sigma',default=3,
+                              type='float',
+                              help='Clean threshold (sigma) [default=%default]')
     imaging_parser.add_option('--mgain',dest='clean_mgain',default=1,
                               type='float',
                               help='Clean major cycle gain [default=%default]')
@@ -1999,6 +2051,9 @@ def main():
                                         ncpus=options.ncpus,
                                         memfraction=options.memfraction,
                                         delete=options.delete)
+        # set a per-observation threshold
+        # so that it can be changed later
+        observations[obsid].clean_threshold=options.clean_threshold
         if observations[obsid].inttime==0:
             sys.exit(1)        
         observation_data[i]['obsid']=observations[obsid].observation_number
@@ -2107,6 +2162,44 @@ def main():
 
 
     ##################################################
+    # quick clean
+    ##################################################
+    for i in xrange(len(observation_data)):
+        if options.quick and not options.selfcal:
+            if observations[observation_data[i]['obsid']].calibration and options.nocal:
+                logger.debug('Skipping quick clean of calibrator observation %s' % observation_data[i]['obsid'])
+                continue
+            # do an initial clean
+            results=observations[observation_data[i]['obsid']].image(
+                suffix='quick',
+                clean_weight=options.clean_weight,
+                imagesize=options.imagesize,
+                pixelscale=options.pixelscale,
+                clean_iterations=observations[observation_data[i]['obsid']].clean_iterations_selfcal,
+                clean_gain=options.clean_gain,
+                clean_mgain=options.clean_mgain,
+                clean_minuv=options.clean_minuv,
+                clean_maxuv=options.clean_maxuv,
+                clean_threshold=0.01,
+                fullpolarization=True,
+                wsclean_arguments='-stopnegative',
+                updateheader=False)
+            if results is None:
+                sys.exit(1)
+            # we don't want these in the end
+            observations[observation_data[i]['obsid']].filestodelete+=results
+
+            # figure out the rms of the residual image
+            residimage=results[0].replace('-image','-residual')
+            med,rms=stat_measure(residimage)
+            logger.info('Measured rms of %d mJy in %s' % (rms*1e3, residimage))
+            logger.info('Setting clean threshold to %d*rms=%d mJy' % (options.clean_threshold_sigma,
+                                                                      options.clean_threshold_sigma*rms*1e3))
+            observations[observation_data[i]['obsid']].clean_threshold=options.clean_threshold_sigma*rms
+            observations[observation_data[i]['obsid']].rawfiles=[]
+            
+
+    ##################################################
     # selfcal
     ##################################################
     for i in xrange(len(observation_data)):
@@ -2125,7 +2218,7 @@ def main():
                 clean_mgain=options.clean_mgain,
                 clean_minuv=options.clean_minuv,
                 clean_maxuv=options.clean_maxuv,
-                clean_threshold=options.clean_threshold,
+                clean_threshold=0.01,
                 fullpolarization=True,
                 wsclean_arguments='-stopnegative',
                 updateheader=False)
@@ -2133,6 +2226,14 @@ def main():
                 sys.exit(1)
             # we don't want these in the end
             observations[observation_data[i]['obsid']].filestodelete+=results
+
+            # figure out the rms of the residual image
+            residimage=results[0].replace('-image','-residual')
+            med,rms=stat_measure(residimage)
+            logger.info('Setting clean threshold to %d*rms=%d mJy' % (options.clean_threshold_sigma,
+                                                                      options.clean_threshold_sigma*rms*1e3))
+            observations[observation_data[i]['obsid']].clean_threshold=options.clean_threshold_sigma*rms
+
                 
             # determine the primary beam
             results=observations[observation_data[i]['obsid']].makepb(beammodel=options.beammodel)
@@ -2141,6 +2242,13 @@ def main():
                                                                       
             if results is None:
                 sys.exit(1)
+
+            # correct the preliminary image
+            results=observations[observation_data[i]['obsid']].pbcorrect()
+            if results is None:
+                sys.exit(1)
+            
+
             # correct the model image
             results=observations[observation_data[i]['obsid']].pbcorrect(model=True)
             # we don't want these in the end
@@ -2171,7 +2279,7 @@ def main():
                 clean_mgain=options.clean_mgain,
                 clean_minuv=options.clean_minuv,
                 clean_maxuv=options.clean_maxuv,
-                clean_threshold=options.clean_threshold,
+                clean_threshold=0,
                 fullpolarization=True,
                 updateheader=False)
 
@@ -2214,6 +2322,7 @@ def main():
                 clean_mgain=options.clean_mgain,
                 clean_minuv=options.clean_minuv,
                 clean_maxuv=options.clean_maxuv,
+                clean_threshold=observations[observation_data[i]['obsid']].clean_threshold,
                 fullpolarization=options.fullpolarization,
                 wsclean_arguments=options.wsclean_arguments,
                 ntorun=options.nprocess)
@@ -2235,8 +2344,10 @@ def main():
                 clean_mgain=options.clean_mgain,
                 clean_minuv=options.clean_minuv,
                 clean_maxuv=options.clean_maxuv,
+                clean_threshold=observations[observation_data[i]['obsid']].clean_threshold,
                 fullpolarization=options.fullpolarization,
                 subbands=options.subbands,
+                
                 wsclean_arguments=options.wsclean_arguments)
             if results is None:
                 sys.exit(1)
@@ -2265,7 +2376,7 @@ def main():
             #observation_data[i]['rawimages'][j]=results[j]
 
         observation_data[i]['clean_iterations']=options.clean_iterations
-        observation_data[i]['clean_threshold']=options.clean_threshold
+        observation_data[i]['clean_threshold']=observations[observation_data[i]['obsid']].clean_threshold
         observation_data[i]['clean_weight']=options.clean_weight
         observation_data[i]['clean_gain']=options.clean_gain
         observation_data[i]['clean_mgain']=options.clean_mgain

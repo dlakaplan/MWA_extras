@@ -2,7 +2,6 @@
 Todo:
 
 -quality metrics:
-  - image rms
   - # of sources detected
 -sub-bands & sub-exposures together
 
@@ -441,12 +440,14 @@ def calibrate_casa(obsid, directory=None, minuv=60):
         logger.error('Unable to instantiate casa:\n%s' % e)
         return None
 
+    if directory is None:
+        directory=basedir
     if minuv is not None:
         command=['from mwapy import ft_beam',
-                 """ft_beam.ft_beam(vis='%s.ms',uvrange='>%dm')""" % (obsid,minuv)]
+                 """ft_beam.ft_beam(vis='%s.ms',uvrange='>%dm',outdir='%s')""" % (obsid,minuv,directory)]
     else:
         command=['from mwapy import ft_beam',
-                 """ft_beam.ft_beam(vis='%s.ms')""" % (obsid)]
+                 """ft_beam.ft_beam(vis='%s.ms',outdir='%s')""" % (obsid,directory)]
 
     logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
     result=casa.run_script(command)
@@ -461,19 +462,11 @@ def calibrate_casa(obsid, directory=None, minuv=60):
         logger.error('No output created')
         return None
     # that file should be the same as the expected output
-    if not outfile == '%s.cal' % obsid:
+    if not os.path.split(outfile)[-1] == '%s.cal' % obsid:
         logger.error('CASA calibration produced %s, but expected %s.cal' % (outfile,
                                                                             obsid))
         return None
-    if not os.path.exists('%s.cal' % obsid):
-        logger.error('CASA calibration command produced no ouptut')
-        return None
-    else:
-        if directory is not None:
-            os.rename('%s.cal' % obsid, os.path.join(directory,
-                                                     '%s.cal' % obsid))
-            return os.path.join(directory,'%s.cal' % obsid)
-        return '%s.cal' % obsid
+    return outfile
 
 ##################################################
 def applycal_casa(obsid, calfile):

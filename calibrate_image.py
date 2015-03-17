@@ -2176,7 +2176,7 @@ def main():
                 clean_threshold=0.01,
                 fullpolarization=True,
                 wsclean_arguments='-stopnegative',
-                updateheader=False)
+                updateheader=True)
             if results is None:
                 sys.exit(1)
             # we don't want these in the end

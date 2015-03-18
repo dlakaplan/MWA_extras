@@ -208,13 +208,18 @@ def match_aegean_sources(sourcelist1, sourcelist2):
                      [s.dec for s in sourcelist1],unit=(u.deg,u.deg))
     coords2=SkyCoord([s.ra for s in sourcelist2],
                      [s.dec for s in sourcelist2],unit=(u.deg,u.deg))
+    S1=[]
+    S2=[]
     for i in xrange(len(coords1)):
         d=coords1[i].separation(coords2)
         if d.min() < matchradius:
             if (not i in I1) and (not numpy.argmin(d) in I2):
                 I1.append(i)
                 I2.append(numpy.argmin(d))
-    return sourcelist1[I1],sourcelist2[I2]
+    for i in xrange(len(I1)):
+        S1.append(sourcelist1[I1[i]])
+        S2.append(sourcelist2[I2[i]])
+    return S1,S2
 
 ##################################################
 class CASAfinder():

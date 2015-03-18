@@ -22,6 +22,7 @@ import collections,glob,numpy
 from astropy.io import fits
 from astropy.coordinates import SkyCoord
 from astropy import units as u
+    
 
 ##############################
 # Custom formatter
@@ -88,6 +89,14 @@ try:
 except ImportError:
     logger.error('Unable to import drivecasa')
     _CASA=False
+
+try:
+    import aegean
+    _aegean=True
+except ImportError:
+    logger.error('Unable to import aegean')
+    _aegean=False
+
 
 ##################################################
 # default search paths for CASAPY and ANOKO/mwa-reduce
@@ -188,6 +197,24 @@ def stat_measure(image, fraction=0.5):
     d=(data[:,:,ystart:ystop,xstart:xstop]).flatten()
     q1,m,q2=numpy.percentile(d, [25,50,75])
     return m,(q2-q1)/1.35
+
+##################################################
+def match_aegean_sources(sourcelist1, sourcelist2):
+    matchradius=10*u.arcsec
+    I1=[]
+    I2=[]
+
+    coords1=SkyCoord([s.ra for s in sourcelist1],
+                     [s.dec for s in sourcelist1],unit=(u.deg,u.deg))
+    coords2=SkyCoord([s.ra for s in sourcelist2],
+                     [s.dec for s in sourcelist2],unit=(u.deg,u.deg))
+    for i in xrange(len(coords1)):
+        d=coords1[i].separation(coords2)
+        if d.min() < matchradius:
+            if (not i in I1) and (not numpy.argmin(d) in I2):
+                I1.append(i)
+                I2.append(numpy.argmin(d))
+    return sourcelist1[I1],sourcelist2[I2]
 
 ##################################################
 class CASAfinder():
@@ -745,6 +772,7 @@ class Observation(metadata.MWA_Observation):
         self.clean_iterations_selfcal=4000
         self.nimages=1
         self.clean_threshold=None
+        self.sources=[]
 
         if os.path.exists(os.path.join(self.basedir,'%s.metafits' % self.obsid)):
             self.metafits=os.path.join(self.basedir,'%s.metafits' % self.obsid)
@@ -1078,7 +1106,8 @@ class Observation(metadata.MWA_Observation):
         self.clean_maxuv=clean_maxuv
         self.fullpolarization=fullpolarization
         self.wsclean_arguments=wsclean_arguments
-        self.clean_threshold=clean_threshold
+        if clean_threshold is not None and clean_threshold > 0:
+            self.clean_threshold=clean_threshold
 
         if suffix is not None:
             name='%s_%s' % (self.obsid,suffix)
@@ -1320,7 +1349,8 @@ class Observation(metadata.MWA_Observation):
         self.clean_weight=clean_weight
         self.imagesize=imagesize
         self.pixelscale=pixelscale
-        self.clean_threshold=clean_threshold
+        if clean_threshold is not None and clean_threshold > 0:
+            self.clean_threshold=clean_threshold
         self.clean_iterations=clean_iterations
         self.clean_gain=clean_gain
         self.clean_mgain=clean_mgain
@@ -1607,18 +1637,21 @@ class Observation(metadata.MWA_Observation):
             name+='_%s' % suffix
         beamname=os.path.join(self.basedir,'beam-%s' % name)
         name=os.path.join(self.basedir, name)
+        outname=name
         if not model:
             imagetype='image.fits'
         else:
             imagetype='model.fits'
+            outname+='_model'
 
         pbcorrectcommand=['pbcorrect']
         if uncorrect:
             pbcorrectcommand.append('-uncorrect')
+            name+='_model'
         pbcorrectcommand+=[name,
                            imagetype,
                            beamname,
-                           name]
+                           outname]
         expected_pbcorroutput=[]
         if uncorrect:
             for pol in ['XX','YY','XY','XYi']:
@@ -1627,11 +1660,11 @@ class Observation(metadata.MWA_Observation):
                                                            imagetype))
         elif self.fullpolarization:
             for pol in ['I','Q','U','V']:
-                expected_pbcorroutput.append('%s-%s.fits' % (name,
+                expected_pbcorroutput.append('%s-%s.fits' % (outname,
                                                              pol))
         else:
             for pol in ['I']:
-                expected_pbcorroutput.append('%s-%s.fits' % (name,
+                expected_pbcorroutput.append('%s-%s.fits' % (outname,
                                                              pol))
 
         logger.info('Will run:\n\t%s' % ' '.join(pbcorrectcommand))
@@ -1684,8 +1717,8 @@ class Observation(metadata.MWA_Observation):
 
         if not self.fullpolarization:
             for pol in ['Q','U','V']:
-                if os.path.exists('%s-%s.fits' % (name,pol)):
-                    self.filestodelete.append('%s-%s.fits' % (name,pol))
+                if os.path.exists('%s-%s.fits' % (outname,pol)):
+                    self.filestodelete.append('%s-%s.fits' % (outname,pol))
 
 
             
@@ -2027,6 +2060,8 @@ def main():
     ##################################################
     # gather initial data
     ##################################################
+    logger.info('**************************************************')
+    logger.info('Gathering initial information...')
     if not (os.path.exists(options.out) and os.path.isdir(options.out)):
         logger.warning('Requested output directory %s does not exist; creating...' % options.out)
         try:
@@ -2099,6 +2134,8 @@ def main():
     ##################################################
     # generate calibration solutions
     ##################################################
+    logger.info('**************************************************')
+    logger.info('Generate calibration solutions...')
     for i in calibrators:
         result=observations[observation_data[i]['obsid']].make_cal(minuv=options.calminuv)
         if result is None:
@@ -2110,6 +2147,8 @@ def main():
     ##################################################
     # apply calibration
     ##################################################
+    logger.info('**************************************************')
+    logger.info('Apply calibration solutions...')
     for i in xrange(len(observation_data)):
         if not observation_data[i]['iscalibrator']:
             try:
@@ -2131,8 +2170,10 @@ def main():
     ##################################################
     # autoprocess
     ##################################################
-    for i in xrange(len(observation_data)):
-        if options.autoprocess:
+    if options.autoprocess:
+        logger.info('**************************************************')
+        logger.info('autoprocess...')
+        for i in xrange(len(observation_data)):
             if observations[observation_data[i]['obsid']].calibration and options.nocal:
                 logger.debug('Skipping autoprocess of calibrator observation %s' % observation_data[i]['obsid'])
                 continue
@@ -2144,8 +2185,10 @@ def main():
     ##################################################
     # chgcentre
     ##################################################
-    for i in xrange(len(observation_data)):
-        if options.chgcentre:
+    if options.chgcentre:
+        logger.info('**************************************************')
+        logger.info('chgcentre...')
+        for i in xrange(len(observation_data)):
             if observations[observation_data[i]['obsid']].calibration and options.nocal:
                 logger.debug('Skipping chgcentre of calibrator observation %s' % observation_data[i]['obsid'])
                 continue
@@ -2157,8 +2200,10 @@ def main():
     ##################################################
     # quick clean
     ##################################################
-    for i in xrange(len(observation_data)):
-        if options.quick and not options.selfcal:
+    if options.quick and not options.selfcal:
+        logger.info('**************************************************')
+        logger.info('Quick clean...')    
+        for i in xrange(len(observation_data)):
             if observations[observation_data[i]['obsid']].calibration and options.nocal:
                 logger.debug('Skipping quick clean of calibrator observation %s' % observation_data[i]['obsid'])
                 continue
@@ -2195,8 +2240,10 @@ def main():
     ##################################################
     # selfcal
     ##################################################
-    for i in xrange(len(observation_data)):
-        if options.selfcal:
+    if options.selfcal:
+        logger.info('**************************************************')
+        logger.info('Selfcal...')    
+        for i in xrange(len(observation_data)):
             if observations[observation_data[i]['obsid']].calibration and options.nocal:
                 logger.debug('Skipping selfcal of calibrator observation %s' % observation_data[i]['obsid'])
                 continue
@@ -2236,11 +2283,24 @@ def main():
             if results is None:
                 sys.exit(1)
 
-            # correct the preliminary image
-            results=observations[observation_data[i]['obsid']].pbcorrect()
-            if results is None:
-                sys.exit(1)
-            
+            if True:
+                # correct the preliminary image
+                results=observations[observation_data[i]['obsid']].pbcorrect()
+                if results is None:
+                    sys.exit(1)
+                Iimage=None
+                for image in results:
+                    if '-I.fits' in image:
+                        Iimage=image
+                if Iimage is None:
+                    logger.warning('Could not find I image for source finding')
+                elif _aegean:
+                    observations[observation_data[i]['obsid']].sources=aegean.find_sources_in_image(Iimage, csigma=10)
+                    if len(observations[observation_data[i]['obsid']].sources)==0:
+                        logger.warning('Aegean found %d sources in %s' % (len(observations[observation_data[i]['obsid']].sources), Iimage))
+                    else:
+                        logger.info('Aegean found %d sources in %s' % (len(observations[observation_data[i]['obsid']].sources), Iimage))
+
 
             # correct the model image
             results=observations[observation_data[i]['obsid']].pbcorrect(model=True)
@@ -2252,7 +2312,16 @@ def main():
             # delete the other Stokes images
             for result in results:
                 if '-Q' in result or '-U' in result or '-V' in result:
-                    os.remove(result)
+                    try:
+                        os.remove(result)
+                    except:
+                        logger.warning('Could not delete %s' % result)
+                        pass
+                else:
+                    f=fits.open(result)
+                    if f[0].data.max()==0:
+                        logger.error('Model image %s has max of 0' % result)
+                        sys.exit(1)
             # uncorrect the beam
             results=observations[observation_data[i]['obsid']].pbcorrect(model=True,
                                                                          uncorrect=True)
@@ -2263,7 +2332,7 @@ def main():
 
             results=observations[observation_data[i]['obsid']].image(
                 predict=True,
-                suffix='selfcal',
+                suffix='selfcal_model',
                 clean_weight=options.clean_weight,
                 imagesize=options.imagesize,
                 pixelscale=options.pixelscale,
@@ -2298,6 +2367,8 @@ def main():
     ##################################################
     # imaging
     ##################################################
+    logger.info('**************************************************')
+    logger.info('Image...')    
     for i in xrange(len(observation_data)):
         if observations[observation_data[i]['obsid']].calibration and options.nocal:
             logger.debug('Skipping imaging of calibrator observation %s' % observation_data[i]['obsid'])
@@ -2413,6 +2484,40 @@ def main():
             results=observations[observation_data[i]['obsid']].multipbcorrect_time()
             if results is None:
                 sys.exit(1)
+
+
+        # do another round of source finding if we did selfcal
+        if options.selfcal:
+            fluxratio=None
+            # need to find the I image
+            # if subbands, need to make sure it is MFS
+            Iimage=None
+            for image in results:
+                if options.subbands==1:
+                    if '-I.fits' in image:
+                        Iimage=image
+                else:
+                    if '-MFS-I.fits' in image:
+                        Iimage=image
+            if Iimage is None:
+                logger.warning('Could not find I image for source finding')
+            elif _aegean:
+                newsources=aegean.find_sources_in_image(Iimage, csigma=10)
+                if len(newsources)==0:
+                    logger.warning('Aegean found %d sources in %s' % (len(newsources), Iimage))
+                else:
+                    logger.info('Aegean found %d sources in %s' % (len(newsources), Iimage))
+                    origsources, newsources=match_aegean_sources(observations[observation_data[i]['obsid']].sources,
+                                                                 newsources)
+                    if len(origsources)==0:
+                        logger.warning('Could not match sources between images')
+                    else:
+                        origfluxes=numpy.array([s.peak_flux for s in origsources])
+                        newfluxes=numpy.array([s.peak_flux for s in newsources])
+                        fluxratio=numpy.median(newfluxes/origfluxes)
+                        logger.info('Determined median flux ratio of %.2f from %d matched sources' % (fluxratio,
+                                                                                                      len(origfluxes)))
+                    
 
         # for j in xrange(len(results)):
         #    observation_data[i]['corrimages'][j]=results[j]

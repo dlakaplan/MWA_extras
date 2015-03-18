@@ -2270,6 +2270,7 @@ def main():
             # figure out the rms of the residual image
             residimage=results[0].replace('-image','-residual')
             med,rms=stat_measure(residimage)
+            logger.info('Measured rms of %d mJy in %s' % (rms*1e3, residimage))
             logger.info('Setting clean threshold to %d*rms=%d mJy' % (options.clean_threshold_sigma,
                                                                       options.clean_threshold_sigma*rms*1e3))
             observations[observation_data[i]['obsid']].clean_threshold=options.clean_threshold_sigma*rms

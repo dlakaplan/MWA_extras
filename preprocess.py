@@ -742,7 +742,7 @@ def main():
                 channel=observations[i].center_channel
                 if not havecalibrator[channel]:
                     cal=find_calibrator.find_calibrator(observations[i].observation_number,
-                                                        matchproject=True,
+                                                        matchproject=False,
                                                         priority='time',
                                                         all=False)
                     if cal is None:
@@ -753,7 +753,7 @@ def main():
                                                       maxtime=cal[0]+1)
                     logger.info(str(metadata.MWA_Observation_Summary(cals[-1])))
                     havecalibrator[channel]=True
-    results+=cals
+            results+=cals
     data=None
 
     logger.info('Processing observations...\n\n')

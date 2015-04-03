@@ -55,9 +55,12 @@ console.setFormatter(fmt)
 # add the handler to the root logger
 logging.getLogger('').addHandler(console)
 
-filehandler = logging.FileHandler('calibrate_image.log')
+#filehandler = logging.FileHandler('calibrate_image.log')
+filehandler = logging.handlers.RotatingFileHandler('calibrate_image.log',
+                                                   backupCount=10)
 filehandler.setLevel(logging.DEBUG)
 filehandler.setFormatter(fmt)
+filehandler.doRollover()
 logging.getLogger('').addHandler(filehandler)
 
 logger = logging.getLogger('preprocess')

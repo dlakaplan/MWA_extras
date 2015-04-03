@@ -7,7 +7,6 @@ import time
 import subprocess
 from astropy.table import Table,Column
 import collections
-import find_calibrator
 
 ##############################
 # Custom formatter
@@ -67,6 +66,7 @@ logger = logging.getLogger('preprocess')
 
 import mwapy
 from mwapy import metadata
+import find_calibrator
 
 
 ################################################################################

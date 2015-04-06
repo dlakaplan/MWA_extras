@@ -765,8 +765,8 @@ def main():
 
     logger.info('Processing observations...\n\n')
     basedir=os.path.abspath(os.curdir)
-    timeres,freqres=None,None
     for obs in results:
+        timeres,freqres=None,None
         processstart=datetime.datetime.now()
         observation=Observation(obs[0], basedir=basedir,
                                 copycommand=options.copycommand,
@@ -793,8 +793,8 @@ def main():
         else:
             timeres,freqres=options.timeres,options.freqres
         msfilesize=observation.cotter(cottercpus=options.cottercpus,
-                                      timeres=options.timeres,
-                                      freqres=options.freqres)
+                                      timeres=timeres,
+                                      freqres=freqres)
         if msfilesize is None:
             break
 

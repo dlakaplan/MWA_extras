@@ -1742,17 +1742,23 @@ class Observation(metadata.MWA_Observation):
         returns list of corrected images on success, None on failure
         """
         
+        beamname=None
         for i in xrange(self.nimages):
-            if suffix is not None:
-                name='%s_%s' % (self.obsid,suffix)
-            else:
-                name=str(self.obsid)            
-            beamname=os.path.join(self.basedir,'beam-%s' % name)
             if self.fullpolarization:
                 rawfile=self.rawfiles[i*4]
             else:
                 rawfile=self.rawfiles[i*2]
-            name=rawfile.replace('-XX-image.fits','')
+
+            name=rawfile.replace('-XX-image.fits','').replace('-XY-image.fits','').replace('-XYi-image.fits','').replace('-YY-image.fits','')
+            if '.fits' in name:
+                logger.error('Cannot construct name base from output %s' % rawfile)
+                return None
+            name=os.path.split(name)[1]
+            if suffix is not None:
+                name+='_%s' % suffix
+            if beamname is None:
+                beamname=os.path.join(self.basedir,'beam-%s' % name)
+            name=os.path.join(self.basedir, name)
             imagetype='image.fits'
 
             pbcorrectcommand=['pbcorrect']

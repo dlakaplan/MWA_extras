@@ -627,6 +627,10 @@ def main():
                       help='Output time resolution (s) [default=%default]')
     parser.add_option('--freqres',dest='freqres',default=40,type='int',
                       help='Output frequency resolution (kHz) [default=%default]')
+    parser.add_option('--caltimeres',dest='caltimeres',default=0,type='int',
+                      help='Output time resolution for calibrators (s) [default=<timeres>]')
+    parser.add_option('--calfreqres',dest='calfreqres',default=0,type='int',
+                      help='Output frequency resolution (kHz) [default=<freqres>]')
     parser.add_option('--cal',dest='cal',default=False,
                       action='store_true',
                       help='Always include a calibrator observation?')
@@ -761,6 +765,7 @@ def main():
 
     logger.info('Processing observations...\n\n')
     basedir=os.path.abspath(os.curdir)
+    timeres,freqres=None,None
     for obs in results:
         processstart=datetime.datetime.now()
         observation=Observation(obs[0], basedir=basedir,
@@ -776,6 +781,17 @@ def main():
         if observation.makemetafits() is None:
             break
             
+        if observation.observation.calibration is not None and observation.observation.calibration:
+            if options.caltimeres==0:
+                timeres=options.timeres
+            else:
+                timeres=options.caltimeres
+            if options.calfreqres==0:
+                freqres=options.freqres
+            else:
+                freqres=options.calfreqres
+        else:
+            timeres,freqres=options.timeres,options.freqres
         msfilesize=observation.cotter(cottercpus=options.cottercpus,
                                       timeres=options.timeres,
                                       freqres=options.freqres)

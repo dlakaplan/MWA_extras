@@ -110,8 +110,9 @@ anokopath=['~kaplan/mwa/anoko/mwa-reduce/build/',
 
 
 catalogdir=os.path.join(os.path.split(os.path.abspath(__file__))[0],'catalogs')
-calmodelfile=os.path.join(catalogdir,'model_a-team.txt')
+# calmodelfile=os.path.join(catalogdir,'model_a-team.txt')
 anokocatalog=os.path.join(catalogdir,'model-catalogue_new.txt')
+calmodelfile=anokocatalog
 casapy=None
 anoko=None
 
@@ -2080,6 +2081,7 @@ def main():
         except Exception,e:
             logger.error('Problem making output directory %s:\n\t%s' % (options.out,e))
             sys.exit(1)            
+    increasesize=False  
     for i in xrange(len(files)):
         file=files[i]
         obsid=int(file.split('.')[0])
@@ -2116,14 +2118,13 @@ def main():
         observation_data[i]['metafits']=observations[obsid].metafits
         pointingcenter=SkyCoord(observations[obsid].RA*u.degree,
                                 observations[obsid].Dec*u.degree)
-        increasesize=False        
-        for source in brightsources.keys():
-            distance=pointingcenter.separation(brightsources[source])
-            if distance > 0.9*(options.imagesize/2)*options.pixelscale*u.degree and distance < options.autosize*(options.imagesize/2)*options.pixelscale*u.degree:
-                logger.warning('Source %s is %.1f deg from field center but outside imaged area; recommend increasing imaged area' % (source,distance.value))
-                increasesize=True
 
-        #logger.info('%d\t%d\t%.2f\t%.2f\t%d\t%.1f' % (observation_data[i]['obsid']
+        if not observation_data[i]['iscalibrator']:
+            for source in brightsources.keys():
+                distance=pointingcenter.separation(brightsources[source])
+                if distance > 0.9*(options.imagesize/2)*options.pixelscale*u.degree and distance < options.autosize*(options.imagesize/2)*options.pixelscale*u.degree:
+                    logger.warning('Source %s is %.1f deg from field center of %d but outside imaged area; recommend increasing imaged area' % (source,distance.value,observations[obsid].observation_number))
+                    increasesize=True
 
     if increasesize and options.autosize>1:
         logger.warning('Increasing imaged area to %dx%d (%.1f deg)' % (options.imagesize*options.autosize,

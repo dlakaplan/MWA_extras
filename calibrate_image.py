@@ -780,6 +780,9 @@ class Observation(metadata.MWA_Observation):
         self.clean_threshold=None
         self.sources=[]
 
+        self.mincpus=1
+        self.minmem=3
+
         if os.path.exists(os.path.join(self.basedir,'%s.metafits' % self.obsid)):
             self.metafits=os.path.join(self.basedir,'%s.metafits' % self.obsid)
         else:
@@ -1391,11 +1394,13 @@ class Observation(metadata.MWA_Observation):
                 stopindex=int(self.duration / self.inttime)
             name='%s_t%03d-%03d' % (name0, startindex, stopindex)
 
+            ncpus=max(self.mincpus,self.ncpus/ntorun)
+            mem=max(self.minmem,self.memfraction/ntorun)
             wscleancommand=['wsclean',
                             '-j',
-                            str(self.ncpus/ntorun),
+                            str(ncpus),
                             '-mem',
-                            str(self.memfraction/ntorun),
+                            str(mem),
                             '-weight',
                             self.clean_weight,
                             '-size',
@@ -1577,6 +1582,33 @@ class Observation(metadata.MWA_Observation):
         for pol in ['xxr','xxi','yyr','yyi','xyr','xyi','yxr','yxi']:
             expected_beamoutput.append('%s-%s.fits' % (beamname,
                                                        pol))
+
+        remake=False
+        # check to see if the expected file already exists
+        # if so, make sure it has the right beammodel 
+        # and size/position/frequency
+        for file in expected_beamoutput:
+            if not os.path.exists(file):
+                remake=True
+            else:
+                fb=fits.open(file)
+                f=fits.open(self.rawfiles[ifile])
+                if not fb[0].header['PBMODEL']==self.beammodel:
+                    remake=True
+                keys=['NAXIS1','NAXIS2',
+                      'CRVAL1','CRVAL2',
+                      'CDELT1','CDELT2',
+                      'CRVAL3']
+                for k in keys:
+                    if fb[0].header[k] != f[0].header[k]:
+                        remake=True
+        if not remake:
+            if not self.clobber:
+                logger.info('All expected beam outputs already exist and match requirements')
+                return expected_beamoutput
+            else:
+                logger.info('All expected beam outputs already exist and match requirements but clobber=True; remaking...')
+                remake=True
 
         logger.info('Will run:\n\t%s' % ' '.join(beamcommand))
         p=subprocess.Popen(' '.join(beamcommand),
@@ -2064,9 +2096,9 @@ def main():
                                         ('exposure_time','f4'),
                                         ('wsclean_arguments','a60'),
                                         ('wsclean_command','a200'),
-                                        ('rawimages','a30',(6,)),               
+                                        #('rawimages','a30',(6,)),               
                                         ('beammodel','a10'),
-                                        ('corrimages','a30',(4,)), 
+                                        #('corrimages','a30',(4,)), 
                                     ])
 
     ##################################################
@@ -2567,6 +2599,7 @@ def main():
                                      format=options.summaryformat)
         logger.info('Summary table written to %s' % options.summaryname)
     except Exception, e:
+        print observation_data[0]
         logger.error('Unable to write summary table %s with format %s:\n%s' % (options.summaryname,
                                                                                options.summaryformat,
                                                                                e))

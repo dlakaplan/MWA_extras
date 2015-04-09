@@ -2308,7 +2308,12 @@ def main():
                 if Iimage is None:
                     logger.warning('Could not find I image for source finding')
                 elif _aegean:
-                    observations[observation_data[i]['obsid']].sources=aegean.find_sources_in_image(Iimage, csigma=10)
+                    try:
+                        observations[observation_data[i]['obsid']].sources=aegean.find_sources_in_image(Iimage, csigma=10)
+                    except Exception,e:
+                        logger.error('Unable to run aegean on %s:\n\t%s' % (Iimage,e))
+                        sys.exit(1)
+
                     if len(observations[observation_data[i]['obsid']].sources)==0:
                         logger.warning('Aegean found %d sources in %s' % (len(observations[observation_data[i]['obsid']].sources), Iimage))
                     else:
@@ -2515,7 +2520,12 @@ def main():
             if Iimage is None:
                 logger.warning('Could not find I image for source finding')
             elif _aegean:
-                newsources=aegean.find_sources_in_image(Iimage, csigma=10)
+                try:
+                    newsources=aegean.find_sources_in_image(Iimage, csigma=10)
+                except Exception,e:
+                    logger.warning('Unable to run aegean on %s:\n\t%s' % (Iimage,e))
+                    #sys.exit(1)
+                    newsources=[]
                 if len(newsources)==0:
                     logger.warning('Aegean found %d sources in %s' % (len(newsources), Iimage))
                 else:

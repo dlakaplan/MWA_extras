@@ -2530,7 +2530,15 @@ def main():
                         fluxratio=numpy.median(newfluxes/origfluxes)
                         logger.info('Determined median flux ratio of %.2f from %d matched sources' % (fluxratio,
                                                                                                       len(origfluxes)))
-                    
+                        for image in results:
+                            try:
+                                f=fits.open(image,'update')
+                                f[0].data/=fluxratio
+                                f[0].header['FLUXSCAL']=(fluxratio,'Ratio of flux compared to pre-selfcal image')
+                                f.flush()
+                                logger.info('Divided %s by %.2f to correct flux scale' % (image,fluxratio))
+                            except:
+                                logger.warning('Unable to correct flux scale for %s' % image)
 
         # for j in xrange(len(results)):
         #    observation_data[i]['corrimages'][j]=results[j]

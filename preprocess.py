@@ -477,8 +477,8 @@ class Observation():
                freqres=40):
 
 
-        compressionfactor_time=(timeres/self.observation.inttime)
-        compressionfactor_freq=(freqres/self.observation.fine_channel)
+        compressionfactor_time=int(timeres/self.observation.inttime)
+        compressionfactor_freq=int(freqres/self.observation.fine_channel)
         logger.info('Expect compression of %d in time and %d in frequency' % (compressionfactor_time,
                                                                               compressionfactor_freq))
         self.mssize=self.fitssize/compressionfactor_time/compressionfactor_freq
@@ -623,11 +623,11 @@ def main():
                       help='Name for output summary table')
     parser.add_option('--downloads',dest='downloads',default=4,type='int',
                       help='Number of simultaneous NGAS downloads [default=%default]')
-    parser.add_option('--timeres',dest='timeres',default=4,type='int',
+    parser.add_option('--timeres',dest='timeres',default=4,type='float',
                       help='Output time resolution (s) [default=%default]')
     parser.add_option('--freqres',dest='freqres',default=40,type='int',
                       help='Output frequency resolution (kHz) [default=%default]')
-    parser.add_option('--caltimeres',dest='caltimeres',default=0,type='int',
+    parser.add_option('--caltimeres',dest='caltimeres',default=0,type='float',
                       help='Output time resolution for calibrators (s) [default=<timeres>]')
     parser.add_option('--calfreqres',dest='calfreqres',default=0,type='int',
                       help='Output frequency resolution (kHz) [default=<freqres>]')

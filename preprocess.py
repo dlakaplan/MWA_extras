@@ -6,6 +6,7 @@ import base64
 import time
 import subprocess
 from astropy.table import Table,Column
+from astropy.coordinates import SkyCoord
 import collections
 
 ##############################
@@ -474,7 +475,8 @@ class Observation():
     ##############################
     def cotter(self, cottercpus=4,
                timeres=4,
-               freqres=40):
+               freqres=40,
+               phasecenter=None):
 
 
         compressionfactor_time=int(timeres/self.observation.inttime)
@@ -504,6 +506,10 @@ class Observation():
                             '-o','%s.ms' % self.obsid]
         if self.useflagfiles:
             self.cottercommand+=['-flagfiles','%s_%%%%.mwaf' % self.obsid]
+        if phasecenter is not None:
+            self.cottercommand+=['-centre',phasecenter.to_string('hmsdms').split()[0],
+                                 phasecenter.to_string('hmsdms').split()[1]]
+                                 
         self.cottercommand+=['*.fits']        
         self.msfile='%s.ms' % self.obsid
         if os.path.exists(self.msfile):
@@ -631,6 +637,10 @@ def main():
                       help='Output time resolution for calibrators (s) [default=<timeres>]')
     parser.add_option('--calfreqres',dest='calfreqres',default=0,type='int',
                       help='Output frequency resolution (kHz) [default=<freqres>]')
+    parser.add_option('--ra',dest='ra',default=None,
+                      help='Output RA phase center (deg) [default=metafits]')
+    parser.add_option('--dec',dest='dec',default=None,
+                      help='Output Dec phase center (deg) [default=metafits]')
     parser.add_option('--cal',dest='cal',default=False,
                       action='store_true',
                       help='Always include a calibrator observation?')
@@ -679,6 +689,11 @@ def main():
                                                                   socket.gethostname(),
                                                                   os.environ['USER']))
     logger.info('**************************************************')
+
+    if options.ra is not None and options.dec is not None:
+        phasecenter=SkyCoord(options.ra, options.dec,frame='icrs',unit='deg')
+    else:
+        phasecenter=None
 
     if len(args)==0:
         if options.starttime is None:
@@ -794,7 +809,8 @@ def main():
             timeres,freqres=options.timeres,options.freqres
         msfilesize=observation.cotter(cottercpus=options.cottercpus,
                                       timeres=timeres,
-                                      freqres=freqres)
+                                      freqres=freqres,
+                                      phasecenter=phasecenter)
         if msfilesize is None:
             break
 

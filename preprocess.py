@@ -6,6 +6,7 @@ import base64
 import time
 import subprocess
 from astropy.table import Table,Column
+from astropy.time import Time
 from astropy.coordinates import SkyCoord
 import collections
 

@@ -909,6 +909,10 @@ class Observation(metadata.MWA_Observation):
         if not selfcal:
             if not self.calibration:
                 return None
+            if self.caltype=='anoko' and self.calibratorsource in badanokosources:
+                logger.warning('Calibrator source %s does not work well with Anoko; switching to CASA calibration...' % self.calibratorsource)
+                self.caltype='casa'
+
             if self.caltype=='anoko':
                 calibrator_name=self.calibratorsource
                 self.calmodelfile=write_calmodelfile(calibrator_name, directory=self.basedir)

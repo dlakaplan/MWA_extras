@@ -110,11 +110,27 @@ anokopath=['~kaplan/mwa/anoko/mwa-reduce/build/',
 
 
 catalogdir=os.path.join(os.path.split(os.path.abspath(__file__))[0],'catalogs')
-# calmodelfile=os.path.join(catalogdir,'model_a-team.txt')
+#calmodelfile=os.path.join(catalogdir,'model_a-team.txt')
 anokocatalog=os.path.join(catalogdir,'model-catalogue_new.txt')
 calmodelfile=anokocatalog
 casapy=None
 anoko=None
+
+# this defines aliases for source names in the anoko
+# calibrator model file
+# e.g., if the metafits says "PictorA", also look for "PicA" in the model file
+# can be many -> one mapping
+calmodelaliases={'PicA': ['PictorA'],
+                 'PKS2331-41': ['J2334-4'],
+                 'HydA': ['HydraA']}
+
+# invert the alias dictionary for faster lookup
+calmodelaliases_inverse={}
+for k in calmodelaliases.keys():
+    for v in calmodelaliases[k]:
+        calmodelaliases_inverse[v]=k
+
+
 
 if not os.path.exists(calmodelfile):
     logger.warning('Unable to find calibrator model file %s' % calmodelfile)
@@ -492,7 +508,7 @@ def calibrate_casa(obsid, directory=None, minuv=60):
         if 'Created' in line:
             outfile=line.split()[1].replace('!','')
     if outfile is None:
-        logger.error('No output created')
+        logger.error('No output created:\n\t%s' % ('\n\t'.join(result[0])))
         return None
     # that file should be the same as the expected output
     if not os.path.split(outfile)[-1] == '%s.cal' % obsid:
@@ -500,6 +516,60 @@ def calibrate_casa(obsid, directory=None, minuv=60):
                                                                             obsid))
         return None
     return outfile
+
+##################################################
+def selfcalibrate_casa(obsid, suffix=None, directory=None, minuv=60):
+    """
+    selfcalibrate_casa(obsid, directory=None, minuv=60)
+    minuv in meters
+    returns name of calibration (gain) file on success
+    returns None on failure
+    """
+    if not _CASA:
+        logger.error("CASA operation not possible")
+        return None
+    if suffix is None:
+        calfile='%s.cal' % obsid
+    else:
+        calfile='%s_%s.cal' % (obsid,suffix)
+    if directory is not None:
+        calfile=os.path.join(directory, calfile)
+
+    basedir=os.path.abspath(os.curdir)
+    try:
+        casa = drivecasa.Casapy(casa_dir=casapy,
+                                working_dir=basedir,
+                                timeout=1200)
+
+    except Exception, e:
+        logger.error('Unable to instantiate casa:\n%s' % e)
+        return None
+
+    if directory is None:
+        directory=basedir
+    if minuv is not None:
+        command=['from taskinit import *',
+                 'import tasks',
+                 """tasks.bandpass(vis='%s.ms',caltable='%s',refant='Tile012',uvrange='>%dm')""" % (obsid,
+                                                                                                    calfile,
+                                                                                                    minuv)]
+    else:
+        command=['from taskinit import *',
+                 'import tasks',
+                 """tasks.bandpass(vis='%s.ms',caltable='%s',refant='Tile012')""" % (obsid,
+                                                                                     calfile)]
+                                                                                     
+
+    logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
+    result=casa.run_script(command)
+    if len(result[1])>0:
+        logger.error('CASA/bandpass returned some errors:\n\t%s' % '\n\t'.join(result[1]))
+        return None
+    if not os.path.exists(calfile):
+        logger.error('Expected CASA output %s does not exist' % calfile)
+        return None
+    return calfile
+
 
 ##################################################
 def applycal_casa(obsid, calfile):
@@ -552,7 +622,7 @@ def extract_calmodel(filename, sourcename):
     while i < len(lines):
         if lines[i].startswith('source'):
             d=lines[i+1].split()
-            if d[0]=='name' and sourcename in d[1]:
+            if d[0]=='name' and (sourcename in d[1] or (sourcename in calmodelaliases_inverse.keys() and calmodelaliases_inverse[sourcename] in d[1])):
                 istart=i
                 i+=1
                 while i < len(lines):
@@ -872,7 +942,14 @@ class Observation(metadata.MWA_Observation):
 
             self.calminuv=minuv
         elif self.caltype=='casa':        
-            result=calibrate_casa(self.obsid, directory=self.basedir, minuv=minuv)
+            if not selfcal:
+                result=calibrate_casa(self.obsid, directory=self.basedir, minuv=minuv)
+            else:
+                result=selfcalibrate_casa(self.obsid,
+                                          suffix='selfcal',
+                                          directory=self.basedir,
+                                          minuv=minuv)
+
             self.calminuv=minuv
         if result is not None:
             self.calibratorfile=result
@@ -1899,6 +1976,9 @@ def main():
     control_parser.add_option('--selfcal',dest='selfcal',default=False,
                               action='store_true',
                               help='Run selfcal?')    
+    control_parser.add_option('--nofluxscale',dest='fluxscale',default=True,
+                              action='store_false',
+                              help='Do not scale the fluxes after selfcal using source finding?')    
     control_parser.add_option('--autosize',default=1,type='float',
                               help='Maximum possible size increase factor to include a bright source [default=%default]')
     imaging_parser.add_option('--size','--imagesize',dest='imagesize',default=2048,type='int',
@@ -2115,6 +2195,9 @@ def main():
             sys.exit(1)            
     increasesize=False  
     for i in xrange(len(files)):
+        if not os.path.exists(files[i]):
+            logger.error('MS %s does not exist' % files[i])
+            sys.exit(1)
         file=files[i]
         obsid=int(file.split('.')[0])
         observations[obsid]=Observation(obsid, 
@@ -2339,7 +2422,7 @@ def main():
                         Iimage=image
                 if Iimage is None:
                     logger.warning('Could not find I image for source finding')
-                elif _aegean:
+                elif _aegean and options.fluxscale:
                     try:
                         observations[observation_data[i]['obsid']].sources=aegean.find_sources_in_image(Iimage, csigma=10)
                     except Exception,e:
@@ -2551,7 +2634,7 @@ def main():
                         Iimage=image
             if Iimage is None:
                 logger.warning('Could not find I image for source finding')
-            elif _aegean:
+            elif _aegean and options.fluxscale:
                 try:
                     newsources=aegean.find_sources_in_image(Iimage, csigma=10)
                 except Exception,e:

@@ -86,6 +86,7 @@ from mwapy import metadata
 try:
     import drivecasa
     _CASA=True
+
 except ImportError:
     logger.error('Unable to import drivecasa')
     _CASA=False
@@ -115,6 +116,7 @@ anokocatalog=os.path.join(catalogdir,'model-catalogue_new.txt')
 calmodelfile=anokocatalog
 casapy=None
 anoko=None
+casa=None
 
 # this defines aliases for source names in the anoko
 # calibrator model file
@@ -365,13 +367,13 @@ def get_msinfo(msfile):
         logger.error('requires drivecasa')
         return None
 
-    try:
-        casa = drivecasa.Casapy(casa_dir=casapy,
-                                working_dir=os.path.abspath(os.curdir),
-                                timeout=1200)
-    except Exception, e:
-        logger.error('Unable to instantiate casa:\n%s' % e)
-        return None
+    # try:
+    #     casa = drivecasa.Casapy(casa_dir=casapy,
+    #                             working_dir=os.path.abspath(os.curdir),
+    #                             timeout=1200)
+    # except Exception, e:
+    #     logger.error('Unable to instantiate casa:\n%s' % e)
+    #     return None
 
     command=['import casac',
              'ms=casac.casac.ms()',
@@ -416,13 +418,13 @@ def check_calibrated(msfile):
         logger.error('requires drivecasa')
         return None
 
-    try:
-        casa = drivecasa.Casapy(casa_dir=casapy,
-                                working_dir=os.path.abspath(os.curdir),
-                                timeout=1200)
-    except Exception, e:
-        logger.error('Unable to instantiate casa:\n%s' % e)
-        return None
+    # try:
+    #     casa = drivecasa.Casapy(casa_dir=casapy,
+    #                             working_dir=os.path.abspath(os.curdir),
+    #                             timeout=1200)
+    # except Exception, e:
+    #     logger.error('Unable to instantiate casa:\n%s' % e)
+    #     return None
 
     command=['import casac',
              't=casac.casac.table()',
@@ -450,14 +452,14 @@ def getcasaversion():
         logger.error('requires drivecasa')
         return None
 
-    try:
-        casa = drivecasa.Casapy(casa_dir=casapy,
-                                working_dir=os.path.abspath(os.curdir),
-                                timeout=1200)
+    # try:
+    #     casa = drivecasa.Casapy(casa_dir=casapy,
+    #                             working_dir=os.path.abspath(os.curdir),
+    #                             timeout=1200)
 
-    except Exception, e:
-        logger.error('Unable to instantiate casa:\n%s' % e)
-        return None
+    # except Exception, e:
+    #     logger.error('Unable to instantiate casa:\n%s' % e)
+    #     return None
 
     command=['pass']
              
@@ -481,14 +483,14 @@ def calibrate_casa(obsid, directory=None, minuv=60):
         logger.error("CASA operation not possible")
         return None
     basedir=os.path.abspath(os.curdir)
-    try:
-        casa = drivecasa.Casapy(casa_dir=casapy,
-                                working_dir=basedir,
-                                timeout=1200)
+    # try:
+    #     casa = drivecasa.Casapy(casa_dir=casapy,
+    #                             working_dir=basedir,
+    #                             timeout=1200)
 
-    except Exception, e:
-        logger.error('Unable to instantiate casa:\n%s' % e)
-        return None
+    # except Exception, e:
+    #     logger.error('Unable to instantiate casa:\n%s' % e)
+    #     return None
 
     if directory is None:
         directory=basedir
@@ -537,14 +539,14 @@ def selfcalibrate_casa(obsid, suffix=None, directory=None, minuv=60):
         calfile=os.path.join(directory, calfile)
 
     basedir=os.path.abspath(os.curdir)
-    try:
-        casa = drivecasa.Casapy(casa_dir=casapy,
-                                working_dir=basedir,
-                                timeout=1200)
+    # try:
+    #     casa = drivecasa.Casapy(casa_dir=casapy,
+    #                             working_dir=basedir,
+    #                             timeout=1200)
 
-    except Exception, e:
-        logger.error('Unable to instantiate casa:\n%s' % e)
-        return None
+    # except Exception, e:
+    #     logger.error('Unable to instantiate casa:\n%s' % e)
+    #     return None
 
     if directory is None:
         directory=basedir
@@ -582,14 +584,14 @@ def applycal_casa(obsid, calfile):
         logger.error("CASA operation not possible")
         return None
     basedir=os.path.abspath(os.curdir)
-    try:
-        casa = drivecasa.Casapy(casa_dir=casapy,
-                                working_dir=basedir,
-                                timeout=1200)
+    # try:
+    #     casa = drivecasa.Casapy(casa_dir=casapy,
+    #                             working_dir=basedir,
+    #                             timeout=1200)
 
-    except Exception, e:
-        logger.error('Unable to instantiate casa:\n%s' % e)
-        return None
+    # except Exception, e:
+    #     logger.error('Unable to instantiate casa:\n%s' % e)
+    #     return None
 
     command=['applycal(vis="%s.ms", gaintable="%s")' % (obsid,
                                                         calfile)]
@@ -974,9 +976,9 @@ class Observation(metadata.MWA_Observation):
         return True on success, False on error
         """
         assert self.caltype in ['anoko','casa']
-        if self.caltype=='casa' and selfcal:
-            logger.error('Cannot do selfcal with CASA calibration')
-            return False
+        #if self.caltype=='casa' and selfcal:
+        #    logger.error('Cannot do selfcal with CASA calibration')
+        #    return False
         if not selfcal:
             if check_calibrated('%s.ms' % self.obsid) and not recalibrate:
                 logger.info('%s.ms is already calibrated and recalibrate is False' % self.obsid)
@@ -1156,6 +1158,8 @@ class Observation(metadata.MWA_Observation):
               clean_maxuv=0,
               clean_threshold=0,
               fullpolarization=True,
+              smallinversion=True,
+              cleanborder=1,
               wsclean_arguments='',
               subbands=1,
               updateheader=True):
@@ -1172,6 +1176,8 @@ class Observation(metadata.MWA_Observation):
               clean_maxuv=0,
               clean_threshold=0,
               fullpolarization=True,
+              smallinversion=True,
+              cleanborder=1,
               wsclean_arguments='',
               subbands=1,
               updateheader=True)
@@ -1191,6 +1197,8 @@ class Observation(metadata.MWA_Observation):
         self.clean_maxuv
         self.clean_threshold
         self.fullpolarization
+        self.smallinversion
+        self.cleanborder
         self.wsclean_arguments
 
         will update the header of the output if desired to include info from 
@@ -1206,6 +1214,8 @@ class Observation(metadata.MWA_Observation):
         self.clean_minuv=clean_minuv
         self.clean_maxuv=clean_maxuv
         self.fullpolarization=fullpolarization
+        self.smallinversion=smallinversion
+        self.cleanborder=cleanborder
         self.wsclean_arguments=wsclean_arguments
         if clean_threshold is not None and clean_threshold > 0:
             self.clean_threshold=clean_threshold
@@ -1239,6 +1249,11 @@ class Observation(metadata.MWA_Observation):
                              str(self.clean_gain),
                              '-mgain',
                              str(self.clean_mgain)]
+        if smallinversion:
+            wscleancommand+=['-smallinversion']
+        else:
+            wscleancommand+=['-nosmallinversion']
+        wscleancommand+=['-cleanborder %d' % self.cleanborder]
         if predict:
             wscleancommand.append('-predict')        
         wscleancommand+=['-name',
@@ -2026,6 +2041,12 @@ def main():
     imaging_parser.add_option('--fullpol','--fullpolarization',dest='fullpolarization',default=False,
                               action='store_true',
                               help='Process full polarization (including cross terms)?')
+    imaging_parser.add_option('--nosmallinversion',dest='smallinversion',default=True
+                              action='store_false',
+                              help='Do not perform small inversion (sacrifice aliasing for speed)?')
+    imaging_parser.add_option('--cleanborder',dest='cleanborder',default=1,
+                              type='int',
+                              help='Clean border in percent of total image size [default=%default]')
     imaging_parser.add_option('--wscleanargs',dest='wsclean_arguments',default='',
                               help='Additional wsclean arguments')
     imaging_parser.add_option('--subexptime',dest='subexptime',default=None,
@@ -2119,6 +2140,19 @@ def main():
         else:
             searchpath=CASAfinder().paths
         logger.error('Unable to find CASAPY in search path:\n\t%s' % ('\n\t'.join(searchpath)))
+        sys.exit(1)
+
+
+    # instantiate the CASA executable
+    # for faster performance
+    try:
+        global casa
+        casa = drivecasa.Casapy(casa_dir=casapy,
+                                working_dir=os.path.abspath(os.curdir),
+                                timeout=1200)
+
+    except Exception, e:
+        logger.error('Unable to instantiate casa:\n%s' % e)
         sys.exit(1)
 
     ##################################################
@@ -2362,6 +2396,8 @@ def main():
                 clean_maxuv=options.clean_maxuv,
                 clean_threshold=0.01,
                 fullpolarization=True,
+                smallinversion=options.smallinversion,
+                cleanborder=options.cleanborder,
                 wsclean_arguments='-stopnegative',
                 updateheader=True)
             if results is None:
@@ -2402,6 +2438,8 @@ def main():
                 clean_maxuv=options.clean_maxuv,
                 clean_threshold=0.01,
                 fullpolarization=True,
+                smallinversion=options.smallinversion,
+                cleanborder=options.cleanborder,
                 wsclean_arguments='-stopnegative',
                 updateheader=False)
             if results is None:
@@ -2439,7 +2477,9 @@ def main():
                     logger.warning('Could not find I image for source finding')
                 elif _aegean and options.fluxscale:
                     try:
-                        observations[observation_data[i]['obsid']].sources=aegean.find_sources_in_image(Iimage, csigma=10)
+                        observations[observation_data[i]['obsid']].sources=aegean.find_sources_in_image(Iimage, 
+                                                                                                        max_summits=5,
+                                                                                                        csigma=10)
                     except Exception,e:
                         logger.error('Unable to run aegean on %s:\n\t%s' % (Iimage,e))
                         sys.exit(1)
@@ -2491,6 +2531,8 @@ def main():
                 clean_maxuv=options.clean_maxuv,
                 clean_threshold=0,
                 fullpolarization=True,
+                smallinversion=options.smallinversion,
+                cleanborder=options.cleanborder,
                 updateheader=False)
 
             results=observations[observation_data[i]['obsid']].make_cal(minuv=options.calminuv,
@@ -2558,8 +2600,9 @@ def main():
                 clean_maxuv=options.clean_maxuv,
                 clean_threshold=observations[observation_data[i]['obsid']].clean_threshold,
                 fullpolarization=options.fullpolarization,
-                subbands=options.subbands,
-                
+                smallinversion=options.smallinversion,
+                cleanborder=options.cleanborder,
+                subbands=options.subbands,                
                 wsclean_arguments=options.wsclean_arguments)
             if results is None:
                 sys.exit(1)
@@ -2651,7 +2694,9 @@ def main():
                 logger.warning('Could not find I image for source finding')
             elif _aegean and options.fluxscale:
                 try:
-                    newsources=aegean.find_sources_in_image(Iimage, csigma=10)
+                    newsources=aegean.find_sources_in_image(Iimage, 
+                                                            max_summits=5,
+                                                            csigma=10)
                 except Exception,e:
                     logger.warning('Unable to run aegean on %s:\n\t%s' % (Iimage,e))
                     #sys.exit(1)

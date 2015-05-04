@@ -130,7 +130,8 @@ for k in calmodelaliases.keys():
     for v in calmodelaliases[k]:
         calmodelaliases_inverse[v]=k
 
-
+# these are sources that don't calibrate well with Anoko
+badanokosources=['3C444']
 
 if not os.path.exists(calmodelfile):
     logger.warning('Unable to find calibrator model file %s' % calmodelfile)
@@ -983,6 +984,16 @@ class Observation(metadata.MWA_Observation):
             return False
         logger.info('Will calibrate %s.ms with %s' % (self.obsid,
                                                       self.calibratorfile))
+
+        if self.caltype=='anoko':
+            if os.path.isdir(self.calibratorfile):
+                logger.warning('Calibrator file %s appears to be CASA output but Anoko calibration is selected; using CASA applycal...' % self.calibratorfile)
+                self.caltype='casa'
+        elif self.caltype=='casa':
+            if not os.path.isdir(self.calibratorfile):
+                logger.warning('Calibrator file %s appears to be Anoko output but CASA calibration is selected; using Anoko applycal...' % self.calibratorfile)
+                self.caltype='anoko'
+
 
         if self.caltype=='anoko':
             if not selfcal:

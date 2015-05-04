@@ -16,7 +16,7 @@ To debug:
 import logging,logging.handlers,datetime,math,sys,socket,os,shutil,io
 from optparse import OptionParser,OptionGroup
 import time
-import subprocess
+import subprocess,fcntl
 from astropy.table import Table,Column
 import collections,glob,numpy
 from astropy.io import fits
@@ -159,6 +159,34 @@ brightsources={'3C353': SkyCoord('17h20m28.1s','-00d58m47s'),
                'PKSJ0130-2610': SkyCoord('01h30m27.8s','-26d09m56s'),
                'VirA': SkyCoord('12h30m49.4s','12d23m28s')}
 
+##################################################
+def non_block_read(output):
+    """
+    allows for non-blocking read during a subprocess call
+    https://gist.github.com/sebclaeys/1232088
+    """
+    fd = output.fileno()
+    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+    try:
+        return output.read()
+    except:
+        return ""
+
+##################################################
+def checkforlock(ms):
+    """
+    checks for a CASA lock file
+    if it finds it, it will delete
+    """
+    for root, dirs, files in os.walk(ms):
+        for name in files:
+            if name == 'table.lock': 
+                logger.debug('Removing CASA table lock from %s' % os.path.join(root,name))
+                os.remove(os.path.join(root,name))
+
+
+##################################################
 def getstatus(p, output=None, error=None):
     """
     pollresults=getstatus(p, output=None, error=None)
@@ -367,13 +395,13 @@ def get_msinfo(msfile):
         logger.error('requires drivecasa')
         return None
 
-    # try:
-    #     casa = drivecasa.Casapy(casa_dir=casapy,
-    #                             working_dir=os.path.abspath(os.curdir),
-    #                             timeout=1200)
-    # except Exception, e:
-    #     logger.error('Unable to instantiate casa:\n%s' % e)
-    #     return None
+    try:
+        casa = drivecasa.Casapy(casa_dir=casapy,
+                                working_dir=os.path.abspath(os.curdir),
+                                timeout=1200)
+    except Exception, e:
+        logger.error('Unable to instantiate casa:\n%s' % e)
+        return None
 
     command=['import casac',
              'ms=casac.casac.ms()',
@@ -381,10 +409,13 @@ def get_msinfo(msfile):
              'print "chanwidth=%d" % (ms.getspectralwindowinfo()["0"]["ChanWidth"]/1e3)',
              'print "nchans=%d" % (ms.getspectralwindowinfo()["0"]["NumChan"])',
              'print "inttime=%f" % (ms.getscansummary()["1"]["0"]["IntegrationTime"])',
+             'print ms.close()',
              't=casac.casac.table()',
              't.open("%s")' % msfile,
              'keys=t.getkeywords()',
-             'print "\\n".join(["%s=%s" % (k,keys[k]) for k in keys.keys()])']
+             't.close()',
+             'print "\\n".join(["%s=%s" % (k,keys[k]) for k in keys.keys()])',
+             'clearstat()']
              
     logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
     result=casa.run_script(command)
@@ -418,13 +449,13 @@ def check_calibrated(msfile):
         logger.error('requires drivecasa')
         return None
 
-    # try:
-    #     casa = drivecasa.Casapy(casa_dir=casapy,
-    #                             working_dir=os.path.abspath(os.curdir),
-    #                             timeout=1200)
-    # except Exception, e:
-    #     logger.error('Unable to instantiate casa:\n%s' % e)
-    #     return None
+    try:
+        casa = drivecasa.Casapy(casa_dir=casapy,
+                                working_dir=os.path.abspath(os.curdir),
+                                timeout=1200)
+    except Exception, e:
+        logger.error('Unable to instantiate casa:\n%s' % e)
+        return None
 
     command=['import casac',
              't=casac.casac.table()',
@@ -452,14 +483,14 @@ def getcasaversion():
         logger.error('requires drivecasa')
         return None
 
-    # try:
-    #     casa = drivecasa.Casapy(casa_dir=casapy,
-    #                             working_dir=os.path.abspath(os.curdir),
-    #                             timeout=1200)
-
-    # except Exception, e:
-    #     logger.error('Unable to instantiate casa:\n%s' % e)
-    #     return None
+    try:
+        casa = drivecasa.Casapy(casa_dir=casapy,
+                                working_dir=os.path.abspath(os.curdir),
+                                timeout=1200)
+        
+    except Exception, e:
+        logger.error('Unable to instantiate casa:\n%s' % e)
+        return None
 
     command=['pass']
              
@@ -483,14 +514,13 @@ def calibrate_casa(obsid, directory=None, minuv=60):
         logger.error("CASA operation not possible")
         return None
     basedir=os.path.abspath(os.curdir)
-    # try:
-    #     casa = drivecasa.Casapy(casa_dir=casapy,
-    #                             working_dir=basedir,
-    #                             timeout=1200)
-
-    # except Exception, e:
-    #     logger.error('Unable to instantiate casa:\n%s' % e)
-    #     return None
+    try:
+        casa = drivecasa.Casapy(casa_dir=casapy,
+                                working_dir=basedir,
+                                timeout=1200)
+    except Exception, e:
+        logger.error('Unable to instantiate casa:\n%s' % e)
+        return None
 
     if directory is None:
         directory=basedir
@@ -501,6 +531,7 @@ def calibrate_casa(obsid, directory=None, minuv=60):
         command=['from mwapy import ft_beam',
                  """ft_beam.ft_beam(vis='%s.ms',outdir='%s')""" % (obsid,directory)]
 
+    command+=['clearstat()']
     logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
     result=casa.run_script(command)
     if len(result[1])>0:
@@ -539,15 +570,14 @@ def selfcalibrate_casa(obsid, suffix=None, directory=None, minuv=60):
         calfile=os.path.join(directory, calfile)
 
     basedir=os.path.abspath(os.curdir)
-    # try:
-    #     casa = drivecasa.Casapy(casa_dir=casapy,
-    #                             working_dir=basedir,
-    #                             timeout=1200)
-
-    # except Exception, e:
-    #     logger.error('Unable to instantiate casa:\n%s' % e)
-    #     return None
-
+    try:
+        casa = drivecasa.Casapy(casa_dir=casapy,
+                                working_dir=basedir,
+                                timeout=1200)
+    except Exception, e:
+        logger.error('Unable to instantiate casa:\n%s' % e)
+        return None
+        
     if directory is None:
         directory=basedir
     if minuv is not None:
@@ -563,6 +593,7 @@ def selfcalibrate_casa(obsid, suffix=None, directory=None, minuv=60):
                                                                                      calfile)]
                                                                                      
 
+    command+=['clearstat()']
     logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
     result=casa.run_script(command)
     if len(result[1])>0:
@@ -584,17 +615,18 @@ def applycal_casa(obsid, calfile):
         logger.error("CASA operation not possible")
         return None
     basedir=os.path.abspath(os.curdir)
-    # try:
-    #     casa = drivecasa.Casapy(casa_dir=casapy,
-    #                             working_dir=basedir,
-    #                             timeout=1200)
+    try:
+        casa = drivecasa.Casapy(casa_dir=casapy,
+                                working_dir=basedir,
+                                 timeout=1200)
 
-    # except Exception, e:
-    #     logger.error('Unable to instantiate casa:\n%s' % e)
-    #     return None
+    except Exception, e:
+        logger.error('Unable to instantiate casa:\n%s' % e)
+        return None
 
     command=['applycal(vis="%s.ms", gaintable="%s")' % (obsid,
                                                         calfile)]
+    command+=['clearstat()']
     logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
     result=casa.run_script(command)
     # this doesn't really produce output
@@ -897,6 +929,10 @@ class Observation(metadata.MWA_Observation):
             return self.__dict__[name]
         else:
             return self.observation.__dict__[name]
+
+    ##############################
+    def checkforlock(self):
+        checkforlock('%s.ms' % self.obsid)
 
     ##############################
     def make_cal(self, minuv=60, selfcal=False):
@@ -1220,6 +1256,8 @@ class Observation(metadata.MWA_Observation):
         if clean_threshold is not None and clean_threshold > 0:
             self.clean_threshold=clean_threshold
 
+        # self.checkforlock()
+
         if suffix is not None:
             name='%s_%s' % (self.obsid,suffix)
         else:
@@ -1309,18 +1347,20 @@ class Observation(metadata.MWA_Observation):
                            stderr=subprocess.PIPE,
                            stdout=subprocess.PIPE,
                            shell=True,
-                           close_fds=False)
+                           close_fds=True)
         while True:
-            p.stdout.flush()
-            p.stderr.flush()
-            for l in p.stdout.readlines():
-                logger.debug(l.rstrip())
-            for l in p.stderr.readlines():
-                logger.error(l.rstrip())
+            s=non_block_read(p.stdout)
+            if len(s)>0:
+                logger.debug(s)
+            s=non_block_read(p.stderr)
+            if len(s)>0:
+                logger.error(s)
             returncode=p.poll()
             if returncode is not None:
                 break
             time.sleep(1)
+
+
         for j in xrange(len(expected_output)):
             file=expected_output[j]
             if not os.path.exists(file):
@@ -2041,7 +2081,7 @@ def main():
     imaging_parser.add_option('--fullpol','--fullpolarization',dest='fullpolarization',default=False,
                               action='store_true',
                               help='Process full polarization (including cross terms)?')
-    imaging_parser.add_option('--nosmallinversion',dest='smallinversion',default=True
+    imaging_parser.add_option('--nosmallinversion',dest='smallinversion',default=True,
                               action='store_false',
                               help='Do not perform small inversion (sacrifice aliasing for speed)?')
     imaging_parser.add_option('--cleanborder',dest='cleanborder',default=1,
@@ -2142,18 +2182,6 @@ def main():
         logger.error('Unable to find CASAPY in search path:\n\t%s' % ('\n\t'.join(searchpath)))
         sys.exit(1)
 
-
-    # instantiate the CASA executable
-    # for faster performance
-    try:
-        global casa
-        casa = drivecasa.Casapy(casa_dir=casapy,
-                                working_dir=os.path.abspath(os.curdir),
-                                timeout=1200)
-
-    except Exception, e:
-        logger.error('Unable to instantiate casa:\n%s' % e)
-        sys.exit(1)
 
     ##################################################
     # and anoko executables

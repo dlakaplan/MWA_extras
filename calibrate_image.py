@@ -16,6 +16,8 @@ To debug:
 import logging,logging.handlers,datetime,math,sys,socket,os,shutil,io
 from optparse import OptionParser,OptionGroup
 import time
+import smtplib
+from email.mime.text import MIMEText
 import subprocess,fcntl
 from astropy.table import Table,Column
 import collections,glob,numpy
@@ -831,6 +833,51 @@ def identify_calibrators(observation_data):
                              
 
     return calibrators, notcalibrators, cal_observations
+
+
+######################################################################
+class ExitHandler():
+    def __init__(self,
+                 name,
+                 email=None):
+        self.name=name
+        self.email=email
+
+    def sendemail(self):
+        if self.email is None:
+            return
+        fromaddr='%s@%s' % (self.name,socket.gethostname())
+        toaddr=self.email
+        subject='%s (PID=%s) finished at %s with exit code %d' % (self.name,
+                                                                  os.getpid(),
+                                                                  datetime.datetime.now(),
+                                                                  self.code)
+        logfile=logging.getLogger('').handlers[2].baseFilename
+        f=open(logfile)
+        lines=f.readlines()
+        f.close()
+        # filter out some extra aegean output if needed
+        goodlines=[]
+        for line in lines:
+            if not 'DEBUG:root' in line:
+                goodlines.append(line)
+        msg=MIMEText(''.join(goodlines))
+        msg['Subject']=subject
+        msg['To']=toaddr
+        msg['From']=fromaddr
+        server = smtplib.SMTP('localhost')
+        try:
+            server.sendmail(fromaddr, [toaddr], msg.as_string())
+            logger.info('Sent email to %s' % toaddr)
+        except Exception,e:
+            logger.error('Cannot send notification email to %s:\n\t%s' % (toaddr,e))
+        server.quit()
+        
+
+    def exit(self, code):        
+        self.code=code
+        self.sendemail()
+        sys.exit(code)
 
 
         
@@ -2102,6 +2149,8 @@ def main():
                       help='Name for output summary table [default=%default]')
     parser.add_option('--summaryformat',dest='summaryformat',default='ascii.commented_header',
                       help='Format for output summary table (from astropy.table) [default=%default]')   
+    parser.add_option('--email',dest='notifyemail', default=None,
+                      help='Notification email [default=no email]')
     control_parser.add_option('--nocal',dest='nocal',default=False,
                               action='store_true',
                               help='Do not image the calibrator observations?')
@@ -2153,6 +2202,7 @@ def main():
     logging.getLogger('').handlers[1].setLevel(loglevels[level][0])
     #logger.info('Log level set: messages that are %s or higher will be shown.' % loglevels[level][1])
 
+    eh=ExitHandler(os.path.split(sys.argv[0])[-1], email=options.notifyemail)
     logger.info('**************************************************')
     logger.info('%s starting at %s UT on host %s with user %s' % (sys.argv[0],
                                                                   datetime.datetime.now(),
@@ -2164,7 +2214,7 @@ def main():
 
     if options.subbands > 1 and options.subexptime is not None:
         logger.error('Cannot do subbands>1 and subexptime<total together')
-        sys.exit(1)
+        eh.exit(1)
 
     ##################################################
     # figure out where CASA lives
@@ -2180,7 +2230,7 @@ def main():
         else:
             searchpath=CASAfinder().paths
         logger.error('Unable to find CASAPY in search path:\n\t%s' % ('\n\t'.join(searchpath)))
-        sys.exit(1)
+        eh.exit(1)
 
 
     ##################################################
@@ -2202,11 +2252,11 @@ def main():
     files=args
     if len(files)==0:
         logger.error('Must supply >=1 ms files to process')
-        sys.exit(1)
+        eh.exit(1)
 
     if options.caltype=='casa' and not os.environ.has_key('MWA_CODE_BASE'):
         logger.error('Environment variable $MWA_CODE_BASE is not set; please set and re-run')
-        sys.exit(1)
+        eh.exit(1)
 
     logger.debug('Using mwapy version %s' % mwapy.__version__)
     result=subprocess.Popen(['wsclean','-version'],
@@ -2269,12 +2319,12 @@ def main():
             os.mkdir(options.out)
         except Exception,e:
             logger.error('Problem making output directory %s:\n\t%s' % (options.out,e))
-            sys.exit(1)            
+            eh.exit(1)            
     increasesize=False  
     for i in xrange(len(files)):
         if not os.path.exists(files[i]):
             logger.error('MS %s does not exist' % files[i])
-            sys.exit(1)
+            eh.exit(1)
         file=files[i]
         obsid=int(file.split('.')[0])
         observations[obsid]=Observation(obsid, 
@@ -2288,7 +2338,7 @@ def main():
         # so that it can be changed later
         observations[obsid].clean_threshold=options.clean_threshold
         if observations[obsid].inttime==0:
-            sys.exit(1)        
+            eh.exit(1)        
         observation_data[i]['obsid']=observations[obsid].observation_number
         observation_data[i]['inttime']=observations[obsid].inttime
         observation_data[i]['chanwidth']=observations[obsid].chanwidth
@@ -2343,7 +2393,7 @@ def main():
     for i in calibrators:
         result=observations[observation_data[i]['obsid']].make_cal(minuv=options.calminuv)
         if result is None:
-            sys.exit(1)
+            eh.exit(1)
         observation_data[i]['calibratorfile']=result
         observation_data[i]['caltype']=observations[observation_data[i]['obsid']].caltype
     times['makecal']=time.time()        
@@ -2366,7 +2416,7 @@ def main():
         
         result=observations[observation_data[i]['obsid']].calibrate(recalibrate=options.recalibrate)
         if result is False or result is None:
-            sys.exit(1)
+            eh.exit(1)
         observation_data[i]['calibratorfile']=observations[observation_data[i]['obsid']].calibratorfile
 
     times['applycal']=time.time()                       
@@ -2429,7 +2479,7 @@ def main():
                 wsclean_arguments='-stopnegative',
                 updateheader=True)
             if results is None:
-                sys.exit(1)
+                eh.exit(1)
             # we don't want these in the end
             observations[observation_data[i]['obsid']].filestodelete+=results
 
@@ -2471,7 +2521,7 @@ def main():
                 wsclean_arguments='-stopnegative',
                 updateheader=False)
             if results is None:
-                sys.exit(1)
+                eh.exit(1)
             # we don't want these in the end
             observations[observation_data[i]['obsid']].filestodelete+=results
 
@@ -2490,13 +2540,13 @@ def main():
             observations[observation_data[i]['obsid']].filestodelete+=results
                                                                       
             if results is None:
-                sys.exit(1)
+                eh.exit(1)
 
             if True:
                 # correct the preliminary image
                 results=observations[observation_data[i]['obsid']].pbcorrect()
                 if results is None:
-                    sys.exit(1)
+                    eh.exit(1)
                 Iimage=None
                 for image in results:
                     if '-I.fits' in image:
@@ -2510,7 +2560,7 @@ def main():
                                                                                                         csigma=10)
                     except Exception,e:
                         logger.error('Unable to run aegean on %s:\n\t%s' % (Iimage,e))
-                        sys.exit(1)
+                        eh.exit(1)
 
                     if len(observations[observation_data[i]['obsid']].sources)==0:
                         logger.warning('Aegean found %d sources in %s' % (len(observations[observation_data[i]['obsid']].sources), Iimage))
@@ -2524,7 +2574,7 @@ def main():
             observations[observation_data[i]['obsid']].filestodelete+=results
 
             if results is None:
-                sys.exit(1)
+                eh.exit(1)
             # delete the other Stokes images
             for result in results:
                 if '-Q' in result or '-U' in result or '-V' in result:
@@ -2537,12 +2587,12 @@ def main():
                     f=fits.open(result)
                     if f[0].data.max()==0:
                         logger.error('Model image %s has max of 0' % result)
-                        sys.exit(1)
+                        eh.exit(1)
             # uncorrect the beam
             results=observations[observation_data[i]['obsid']].pbcorrect(model=True,
                                                                          uncorrect=True)
             if results is None:
-                sys.exit(1)
+                eh.exit(1)
             # we don't want these in the end
             observations[observation_data[i]['obsid']].filestodelete+=results
 
@@ -2566,11 +2616,11 @@ def main():
             results=observations[observation_data[i]['obsid']].make_cal(minuv=options.calminuv,
                                                                         selfcal=True)
             if results is None:
-                sys.exit(1)
+                eh.exit(1)
             
             result=observations[observation_data[i]['obsid']].calibrate(selfcal=True)
             if result is False or result is None:
-                sys.exit(1)
+                eh.exit(1)
             observation_data[i]['calibratorfile']=observations[observation_data[i]['obsid']].calibratorfile
             observations[observation_data[i]['obsid']].selfcal=True
 
@@ -2609,7 +2659,7 @@ def main():
                 wsclean_arguments=options.wsclean_arguments,
                 ntorun=options.nprocess)
             if results is None:
-                sys.exit(1)
+                eh.exit(1)
 
             if options.fullpolarization:
                 observation_data[i]['subexposures']=len(results)/4
@@ -2633,7 +2683,7 @@ def main():
                 subbands=options.subbands,                
                 wsclean_arguments=options.wsclean_arguments)
             if results is None:
-                sys.exit(1)
+                eh.exit(1)
             
             observation_data[i]['subbands']=options.subbands
 
@@ -2643,7 +2693,7 @@ def main():
                 f=fits.open(file,'update')
             except Exception,e:
                 logger.open('Unable to open image output %s for updating:\n\t%s' % (file,e))
-                sys.exit(1)
+                eh.exit(1)
 
             if j==0 and observation_data[i]['subbands']>1:
                 observation_data[i]['subband_bandwidth']=f[0].header['BANDWDTH']
@@ -2677,32 +2727,32 @@ def main():
         if options.subbands==1:
             results=observations[observation_data[i]['obsid']].makepb(beammodel=options.beammodel)
             if results is None:
-                sys.exit(1)
+                eh.exit(1)
         else:
             for subband in xrange(options.subbands+1):
                 filesperband=2+2*options.fullpolarization
                 results=observations[observation_data[i]['obsid']].makepb(beammodel=options.beammodel,
                                                                           ifile=subband*filesperband)
                 if results is None:
-                    sys.exit(1)
+                    eh.exit(1)
         observation_data[i]['beammodel']=options.beammodel
 
         if observations[observation_data[i]['obsid']].nimages==1:
             if options.subbands==1:
                 results=observations[observation_data[i]['obsid']].pbcorrect()
                 if results is None:
-                    sys.exit(1)
+                    eh.exit(1)
             else:
                 for subband in xrange(options.subbands+1):
                     filesperband=2+2*options.fullpolarization
                     results=observations[observation_data[i]['obsid']].pbcorrect(ifile=subband*filesperband)
                     if results is None:
-                        sys.exit(1)
+                        eh.exit(1)
  
         else:
             results=observations[observation_data[i]['obsid']].multipbcorrect_time()
             if results is None:
-                sys.exit(1)
+                eh.exit(1)
 
 
         # do another round of source finding if we did selfcal
@@ -2727,7 +2777,7 @@ def main():
                                                             csigma=10)
                 except Exception,e:
                     logger.warning('Unable to run aegean on %s:\n\t%s' % (Iimage,e))
-                    #sys.exit(1)
+                    #eh.exit(1)
                     newsources=[]
                 if len(newsources)==0:
                     logger.warning('Aegean found %d sources in %s' % (len(newsources), Iimage))
@@ -2762,7 +2812,7 @@ def main():
         observation_data_table=Table(observation_data)
     except Exception,e:
         logger.error('Unable to create Table for summary data:\n\t%s' % e)
-        sys.exit(1)
+        eh.exit(1)
 
     try:
         observation_data_table.write(options.summaryname,
@@ -2796,7 +2846,7 @@ def main():
 
 
 
-    sys.exit(0)
+    eh.exit(0)
 
                                                                 
 ######################################################################

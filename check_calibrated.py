@@ -29,8 +29,7 @@ def check_calibrated(msfile):
     try:
         casa = drivecasa.Casapy(casa_dir=casapy,
                                 working_dir=os.path.abspath(os.curdir),
-                                timeout=1200,
-                                gui=False)
+                                timeout=1200)
     except Exception, e:
         logger.error('Unable to instantiate casa:\n%s' % e)
         return None

@@ -57,7 +57,7 @@ console.setFormatter(fmt)
 logging.getLogger('').addHandler(console)
 
 #filehandler = logging.FileHandler('calibrate_image.log')
-filehandler = logging.handlers.RotatingFileHandler('calibrate_image.log',
+filehandler = logging.handlers.RotatingFileHandler('preprocess.log',
                                                    backupCount=10)
 filehandler.setLevel(logging.DEBUG)
 filehandler.setFormatter(fmt)
@@ -477,7 +477,8 @@ class Observation():
     def cotter(self, cottercpus=4,
                timeres=4,
                freqres=40,
-               phasecenter=None):
+               phasecenter=None,
+               allowmissing=True):
 
 
         compressionfactor_time=int(timeres/self.observation.inttime)
@@ -511,6 +512,8 @@ class Observation():
             self.cottercommand+=['-centre',phasecenter.to_string('hmsdms').split()[0],
                                  phasecenter.to_string('hmsdms').split()[1]]
                                  
+        if allowmissing:
+            self.cottercommand+=['-allowmissing']
         self.cottercommand+=['*.fits']        
         self.msfile='%s.ms' % self.obsid
         if os.path.exists(self.msfile):
@@ -630,6 +633,9 @@ def main():
                       help='Name for output summary table')
     parser.add_option('--downloads',dest='downloads',default=4,type='int',
                       help='Number of simultaneous NGAS downloads [default=%default]')
+    parser.add_option('--nomissing',dest='allowmissing',default=True,
+                      action='store_false',
+                      help='Do not allow missing GPU box files')
     parser.add_option('--timeres',dest='timeres',default=4,type='float',
                       help='Output time resolution (s) [default=%default]')
     parser.add_option('--freqres',dest='freqres',default=40,type='int',
@@ -811,7 +817,8 @@ def main():
         msfilesize=observation.cotter(cottercpus=options.cottercpus,
                                       timeres=timeres,
                                       freqres=freqres,
-                                      phasecenter=phasecenter)
+                                      phasecenter=phasecenter,
+                                      allowmissing=options.allowmissing)
         if msfilesize is None:
             break
 

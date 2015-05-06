@@ -1973,7 +1973,7 @@ def main():
     imaging_parser=OptionGroup(parser, 'Imaging options')
     control_parser=OptionGroup(parser, 'Control options')
     
-    calibration_parser.add_option('--caltype',dest='caltype',default='anoko',
+    calibration_parser.add_option('--caltype',dest='caltype',default='casa',
                                   type='choice',
                                   choices=['anoko','casa'],
                                   help='Type of calibration [default=%default]')
@@ -2019,7 +2019,7 @@ def main():
     imaging_parser.add_option('--gain',dest='clean_gain',default=0.1,
                               type='float',
                               help='Clean gain [default=%default]')
-    imaging_parser.add_option('--weight',dest='clean_weight',default='uniform',
+    imaging_parser.add_option('--weight',dest='clean_weight',default='briggs -1.0',
                               help='Clean weighting [default=%default]')
     imaging_parser.add_option('--minuv',dest='clean_minuv',default=0,
                               type='float',

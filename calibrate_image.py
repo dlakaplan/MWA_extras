@@ -80,7 +80,7 @@ for k in calmodelaliases.keys():
         calmodelaliases_inverse[v]=k
 
 # these are sources that don't calibrate well with Anoko
-badanokosources=['3C444']
+badanokosources=['3C444','PKS2356-61']
 
 if not os.path.exists(calmodelfile):
     logger.warning('Unable to find calibrator model file %s' % calmodelfile)

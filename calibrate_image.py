@@ -16,8 +16,6 @@ To debug:
 import logging,logging.handlers,datetime,math,sys,socket,os,shutil,io
 from optparse import OptionParser,OptionGroup
 import time
-import smtplib
-from email.mime.text import MIMEText
 import subprocess,fcntl
 from astropy.table import Table,Column
 import collections,glob,numpy
@@ -25,62 +23,9 @@ from astropy.io import fits
 from astropy.coordinates import SkyCoord
 from astropy import units as u
     
-
-##############################
-# Custom formatter
-# http://stackoverflow.com/questions/1343227/can-pythons-logging-format-be-modified-depending-on-the-message-log-level
-class MyFormatter(logging.Formatter):
-    err_fmt  = '\n\n# %(asctime)s %(levelname)s:%(name)s: %(message)s\n\n'
-    warning_fmt  = '\n# %(asctime)s %(levelname)s:%(name)s: %(message)s\n'
-    other_fmt  = '# %(asctime)s %(levelname)s:%(name)s: %(message)s'
-
-    def __init__(self, fmt=other_fmt):
-        logging.Formatter.__init__(self, fmt)
-
-    def format(self, record):
-
-        # Save the original format configured by the user
-        # when the logger formatter was instantiated
-        format_orig = self._fmt
-
-        # Replace the original format with one customized by logging level
-        if record.levelno == logging.WARNING:
-            self._fmt = MyFormatter.warning_fmt
-
-        elif record.levelno >= logging.ERROR:
-            self._fmt = MyFormatter.err_fmt
-
-        # Call the original formatter class to do the grunt work
-        result = logging.Formatter.format(self, record)
-
-        # Restore the original format configured by the user
-        self._fmt = format_orig
-
-        return result
+import extra_utils
+logger=extra_utils.makelogger('calibrate_image')
     
-fmt = MyFormatter()
-# set up logging to file - see previous section for more details
-logging.basicConfig(level=logging.DEBUG,
-                    datefmt='%Y-%m-%d %H:%M:%S',
-                    filename='/dev/null')
-
-
-# define a Handler which writes INFO messages or higher to the sys.stderr
-console = logging.StreamHandler()
-console.setLevel(logging.WARNING)
-console.setFormatter(fmt)
-# add the handler to the root logger
-logging.getLogger('').addHandler(console)
-
-#filehandler = logging.FileHandler('calibrate_image.log')
-filehandler = logging.handlers.RotatingFileHandler('calibrate_image.log',
-                                                   backupCount=10)
-filehandler.setLevel(logging.DEBUG)
-filehandler.setFormatter(fmt)
-filehandler.doRollover()
-logging.getLogger('').addHandler(filehandler)
-
-logger = logging.getLogger('calibrate_image')
 
 import mwapy
 from mwapy import metadata
@@ -835,49 +780,6 @@ def identify_calibrators(observation_data):
     return calibrators, notcalibrators, cal_observations
 
 
-######################################################################
-class ExitHandler():
-    def __init__(self,
-                 name,
-                 email=None):
-        self.name=name
-        self.email=email
-
-    def sendemail(self):
-        if self.email is None:
-            return
-        fromaddr='%s@%s' % (self.name,socket.gethostname())
-        toaddr=self.email
-        subject='%s (PID=%s) finished at %s with exit code %d' % (self.name,
-                                                                  os.getpid(),
-                                                                  datetime.datetime.now(),
-                                                                  self.code)
-        logfile=logging.getLogger('').handlers[2].baseFilename
-        f=open(logfile)
-        lines=f.readlines()
-        f.close()
-        # filter out some extra aegean output if needed
-        goodlines=[]
-        for line in lines:
-            if not 'DEBUG:root' in line:
-                goodlines.append(line)
-        msg=MIMEText(''.join(goodlines))
-        msg['Subject']=subject
-        msg['To']=toaddr
-        msg['From']=fromaddr
-        server = smtplib.SMTP('localhost')
-        try:
-            server.sendmail(fromaddr, [toaddr], msg.as_string())
-            logger.info('Sent email to %s' % toaddr)
-        except Exception,e:
-            logger.error('Cannot send notification email to %s:\n\t%s' % (toaddr,e))
-        server.quit()
-        
-
-    def exit(self, code):        
-        self.code=code
-        self.sendemail()
-        sys.exit(code)
 
 
         
@@ -2202,7 +2104,7 @@ def main():
     logging.getLogger('').handlers[1].setLevel(loglevels[level][0])
     #logger.info('Log level set: messages that are %s or higher will be shown.' % loglevels[level][1])
 
-    eh=ExitHandler(os.path.split(sys.argv[0])[-1], email=options.notifyemail)
+    eh=extra_utils.ExitHandler(os.path.split(sys.argv[0])[-1], email=options.notifyemail)
     logger.info('**************************************************')
     logger.info('%s starting at %s UT on host %s with user %s' % (sys.argv[0],
                                                                   datetime.datetime.now(),

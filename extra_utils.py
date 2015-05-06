@@ -1,6 +1,6 @@
 import smtplib
 from email.mime.text import MIMEText
-import os,datetime
+import os,datetime,socket,sys
 import logging
 
 ##############################
@@ -65,6 +65,11 @@ def makelogger(name):
 
 ######################################################################
 class ExitHandler():
+    """
+    a handler for exiting from a script
+    will do various cleanup and notification items on exit
+    including sending an email if desired
+    """
     def __init__(self,
                  name,
                  email=None):
@@ -105,9 +110,9 @@ class ExitHandler():
         server = smtplib.SMTP('localhost')
         try:
             server.sendmail(fromaddr, [toaddr], msg.as_string())
-            logger.info('Sent email to %s' % toaddr)
+            logging.getLogger('').info('Sent email to %s' % toaddr)
         except Exception,e:
-            logger.error('Cannot send notification email to %s:\n\t%s' % (toaddr,e))
+            logging.getLogger('').error('Cannot send notification email to %s:\n\t%s' % (toaddr,e))
         server.quit()
         
 

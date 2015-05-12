@@ -1145,6 +1145,7 @@ class Observation(metadata.MWA_Observation):
               fullpolarization=True,
               smallinversion=True,
               cleanborder=1,
+              fitbeam=True,
               wsclean_arguments='',
               subbands=1,
               updateheader=True):
@@ -1163,6 +1164,7 @@ class Observation(metadata.MWA_Observation):
               fullpolarization=True,
               smallinversion=True,
               cleanborder=1,
+              fitbeam=True,
               wsclean_arguments='',
               subbands=1,
               updateheader=True)
@@ -1184,6 +1186,7 @@ class Observation(metadata.MWA_Observation):
         self.fullpolarization
         self.smallinversion
         self.cleanborder
+        self.fitbeam
         self.wsclean_arguments
 
         will update the header of the output if desired to include info from 
@@ -1201,6 +1204,7 @@ class Observation(metadata.MWA_Observation):
         self.fullpolarization=fullpolarization
         self.smallinversion=smallinversion
         self.cleanborder=cleanborder
+        self.fitbeam=fitbeam
         self.wsclean_arguments=wsclean_arguments
         if clean_threshold is not None and clean_threshold > 0:
             self.clean_threshold=clean_threshold
@@ -1241,6 +1245,10 @@ class Observation(metadata.MWA_Observation):
         else:
             wscleancommand+=['-nosmallinversion']
         wscleancommand+=['-cleanborder %d' % self.cleanborder]
+        if fitbeam:
+            wscleancommand+=['-fitbeam']
+        else:
+            wscleancommand+=['-nofitbeam']
         if predict:
             wscleancommand.append('-predict')        
         wscleancommand+=['-name',
@@ -2036,6 +2044,9 @@ def main():
     imaging_parser.add_option('--cleanborder',dest='cleanborder',default=1,
                               type='int',
                               help='Clean border in percent of total image size [default=%default]')
+    imaging_parser.add_option('--nofitbeam',dest='fitbeam',default=True,
+                              action='store_false',
+                              help='Determine beam shape from longest projected baseline (not from fitting the PSF)')
     imaging_parser.add_option('--wscleanargs',dest='wsclean_arguments',default='',
                               help='Additional wsclean arguments')
     imaging_parser.add_option('--subexptime',dest='subexptime',default=None,
@@ -2378,6 +2389,7 @@ def main():
                 fullpolarization=True,
                 smallinversion=options.smallinversion,
                 cleanborder=options.cleanborder,
+                fitbeam=options.fitbeam,
                 wsclean_arguments='-stopnegative',
                 updateheader=True)
             if results is None:
@@ -2419,6 +2431,7 @@ def main():
                 clean_threshold=0.01,
                 fullpolarization=True,
                 smallinversion=options.smallinversion,
+                fitbeam=options.fitbeam,
                 cleanborder=options.cleanborder,
                 wsclean_arguments='-stopnegative',
                 updateheader=False)
@@ -2512,6 +2525,7 @@ def main():
                 clean_threshold=0,
                 fullpolarization=True,
                 smallinversion=options.smallinversion,
+                fitbeam=options.fitbeam,
                 cleanborder=options.cleanborder,
                 updateheader=False)
 
@@ -2581,6 +2595,7 @@ def main():
                 clean_threshold=observations[observation_data[i]['obsid']].clean_threshold,
                 fullpolarization=options.fullpolarization,
                 smallinversion=options.smallinversion,
+                fitbeam=options.fitbeam,
                 cleanborder=options.cleanborder,
                 subbands=options.subbands,                
                 wsclean_arguments=options.wsclean_arguments)

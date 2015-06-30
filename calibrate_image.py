@@ -40,6 +40,9 @@ except ImportError:
 
 try:
     import aegean
+    import BANE    
+    # make the logging output from aegean more reasonable
+    logging.getLogger("Aegean").setLevel(logging.INFO)
     _aegean=True
 except ImportError:
     logger.error('Unable to import aegean')
@@ -780,9 +783,29 @@ def identify_calibrators(observation_data):
     return calibrators, notcalibrators, cal_observations
 
 
+######################################################################
+def find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True):
+    """
+    sources,rmsimage,bgimage=find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True)
+    runs aegean.find_sources_in_image
+    but first runs BANE to get the BG/rms estimates
+    """
+    if usebane:
+        outbase=os.path.splitext(imagename)[0]
+        BANE.filter_image(imagename, 
+                          outbase,
+                          mask=False)
+        rmsimage=outbase + '_rms.fits'
+        bgimage=outbase + '_bkg.fits'
+    else:
+        rmsimage,bgimage=None,None
 
-
-        
+    sources=aegean.find_sources_in_image(imagename,
+                                         max_summits=max_summits,
+                                         csigma=csigma,
+                                         rmsin=rmsimage,
+                                         bkgin=bgimage)
+    return sources,rmsimage,bgimage
 ######################################################################
 class Observation(metadata.MWA_Observation):
 
@@ -2470,9 +2493,14 @@ def main():
                     logger.warning('Could not find I image for source finding')
                 elif _aegean and options.fluxscale:
                     try:
-                        observations[observation_data[i]['obsid']].sources=aegean.find_sources_in_image(Iimage, 
-                                                                                                        max_summits=5,
-                                                                                                        csigma=10)
+                        observations[observation_data[i]['obsid']].sources,rmsimage,bgimage=find_sources_in_image(Iimage, 
+                                                                                                 max_summits=5,
+                                                                                                 csigma=10)
+                        if rmsimage is not None:
+                            observations[observation_data[i]['obsid']].filestodelete.append(rmsimage)
+                        if bgimage is not None:
+                            observations[observation_data[i]['obsid']].filestodelete.append(bgimage)
+
                     except Exception,e:
                         logger.error('Unable to run aegean on %s:\n\t%s' % (Iimage,e))
                         eh.exit(1)
@@ -2689,13 +2717,19 @@ def main():
                 logger.warning('Could not find I image for source finding')
             elif _aegean and options.fluxscale:
                 try:
-                    newsources=aegean.find_sources_in_image(Iimage, 
-                                                            max_summits=5,
-                                                            csigma=10)
+                    newsources,newrmsimage,newbgimage=find_sources_in_image(Iimage, 
+                                                                            max_summits=5,
+                                                                            csigma=10)
+                    if newrmsimage is not None:
+                        observations[observation_data[i]['obsid']].filestodelete.append(newrmsimage)
+                    if newbgimage is not None:
+                        observations[observation_data[i]['obsid']].filestodelete.append(newbgimage)
+
                 except Exception,e:
                     logger.warning('Unable to run aegean on %s:\n\t%s' % (Iimage,e))
                     #eh.exit(1)
                     newsources=[]
+                    newrmsimage,newbgimage=None,None
                 if len(newsources)==0:
                     logger.warning('Aegean found %d sources in %s' % (len(newsources), Iimage))
                 else:

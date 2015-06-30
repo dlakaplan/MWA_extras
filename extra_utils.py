@@ -1,7 +1,7 @@
 import smtplib
 from email.mime.text import MIMEText
 import os,datetime,socket,sys
-import logging
+import logging,logging.handlers
 
 ##############################
 # Custom formatter
@@ -113,6 +113,15 @@ class ExitHandler():
             logging.getLogger('').info('Sent email to %s' % toaddr)
         except Exception,e:
             logging.getLogger('').error('Cannot send notification email to %s:\n\t%s' % (toaddr,e))
+            msg=MIMEText('[message text too large]')
+            msg['Subject']=subject
+            msg['To']=toaddr
+            msg['From']=fromaddr
+            try:
+                server.sendmail(fromaddr, [toaddr], msg.as_string())
+                logging.getLogger('').info('Sent truncated email to %s' % toaddr)
+            except Exception,e:
+                logging.getLogger('').error('Cannot send truncated notification email to %s:\n\t%s' % (toaddr,e))            
         server.quit()
         
 

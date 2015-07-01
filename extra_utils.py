@@ -101,7 +101,7 @@ class ExitHandler():
         # filter out some extra aegean output if needed
         goodlines=[]
         for line in lines:
-            if not 'DEBUG:root' in line:
+            if not 'DEBUG:Aegean' in line:
                 goodlines.append(line)
         msg=MIMEText(''.join(goodlines))
         msg['Subject']=subject

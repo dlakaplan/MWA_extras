@@ -368,7 +368,11 @@ def get_msinfo(msfile):
              'clearstat()']
              
     logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
-    result=casa.run_script(command)
+    try:
+        result=casa.run_script(command)
+    except:
+        logger.error('CASA returned some errors getting ms info for %s' % msfile)
+        return None
     if len(result[1])>0:
         logger.error('CASA returned some errors:\n\t%s' % '\n\t'.join(result[1]))
         return None
@@ -869,7 +873,11 @@ class Observation(metadata.MWA_Observation):
 
         if not os.path.exists('%s.ms' % self.obsid):
             logger.error('MS file %s.ms does not exist' % self.obsid)
-        self.chanwidth, self.inttime, self.nchans, self.otherkeys=get_msinfo('%s.ms' % self.obsid)
+        result=get_msinfo('%s.ms' % self.obsid)
+        if result is None:
+            logger.error('Cannot get info for MS file %s.ms' % self.obsid)
+        else:
+            self.chanwidth, self.inttime, self.nchans, self.otherkeys=result
         self.filestodelete=[]
 
     ##############################

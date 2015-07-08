@@ -445,7 +445,7 @@ class Observation():
         for f in self.downloadedfiles:
             if '.zip' in f:
                 logger.info('Unzipping flags from %s' % f)
-                subprocess.Popen(['unzip',f],stderr=subprocess.PIPE,
+                subprocess.Popen(['unzip','-j',f],stderr=subprocess.PIPE,
                                  stdout=subprocess.PIPE)
                 self.useflagfiles=True
         self.cottercommand=['cotter','-j',str(cottercpus),

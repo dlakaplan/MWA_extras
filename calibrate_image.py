@@ -1532,6 +1532,7 @@ class Observation(metadata.MWA_Observation):
             ncpus=max(self.mincpus,self.ncpus/ntorun)
             mem=max(self.minmem,self.memfraction/ntorun)
             wscleancommand=['wsclean',
+                            '-no-reorder',
                             '-j',
                             str(ncpus),
                             '-mem',
@@ -1554,6 +1555,9 @@ class Observation(metadata.MWA_Observation):
                                  str(self.clean_gain),
                                  '-mgain',
                                  str(self.clean_mgain)]
+                if self.clean_mgain < 1 and ntorun>1:
+                    logger.warning('Unable to run multiple wscleans in parallel because major cycles are requested.  Setting nprocess to 1...')
+                    ntorun=1
             wscleancommand+=['-name',
                              name]
             if self.clean_minuv > 0:

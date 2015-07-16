@@ -999,7 +999,10 @@ class Observation(metadata.MWA_Observation):
             if check_calibrated('%s.ms' % self.obsid) and not recalibrate:
                 logger.info('%s.ms is already calibrated and recalibrate is False' % self.obsid)
                 return True
-
+        if self.calibratorfile is None:
+            logger.error('No calibration file present for %s.ms' % self.obsid)
+            return False
+                
         if not os.path.exists(self.calibratorfile):
             logger.error('Cannot find calibration file %s for observation %s' % (self.calibratorfile,
                                                                                  self.obsid))

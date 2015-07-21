@@ -768,10 +768,10 @@ def identify_calibrators(observation_data):
             if good.sum()>1:
                 # find the closest in time
                 dt=numpy.abs(observation_data[i]['obsid']-observation_data[good]['obsid'])
-                closest=observation_data[dt==dt.min()]
+                closest=observation_data[good][dt==dt.min()]
                 logger.info('Will use %d (separation=%d s) for calibration of %s' % (closest['obsid'],
                                                                                      numpy.abs(closest['obsid']-observation_data[i]['obsid']),
-                                                                                 observation_data[i]['obsid']))
+                                                                                     observation_data[i]['obsid']))
                 cal_observations[observation_data[i]['obsid']]=closest['obsid']
             else:
                 logger.info('Will use %d for calibration of %s' % (observation_data[good]['obsid'],
@@ -2222,7 +2222,7 @@ def main():
     observations=collections.OrderedDict()
     observation_data=numpy.zeros((len(files),),
                                  dtype=[('obsid','i4'),
-                                        ('metafits','a20'),
+                                        ('metafits','a40'),
                                         ('inttime','f4'),
                                         ('chanwidth','f4'),
                                         ('ms_cotterversion','a20'),
@@ -2325,7 +2325,6 @@ def main():
                                                                        options.imagesize*options.autosize*options.pixelscale))
         options.imagesize*=options.autosize
 
-
     calibrators, notcalibrators, cal_observations=identify_calibrators(observation_data)
     for i in notcalibrators:
         try:
@@ -2335,7 +2334,7 @@ def main():
             observation_data[i]['calibrator']=-1
             observations[observation_data[i]['obsid']].calibrator=-1
     times['init']=time.time()
-    
+
     ##################################################
     # generate calibration solutions
     ##################################################

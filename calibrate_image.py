@@ -2159,6 +2159,7 @@ def main():
                                                                   datetime.datetime.now(),
                                                                   socket.gethostname(),
                                                                   os.environ['USER']))
+    logger.debug('In %s' % os.path.abspath(os.curdir))
     logger.debug('Command was:\n\t%s' % command)
     logger.info('**************************************************')
 

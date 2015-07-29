@@ -359,6 +359,7 @@ def get_msinfo(msfile):
              'print "chanwidth=%d" % (ms.getspectralwindowinfo()["0"]["ChanWidth"]/1e3)',
              'print "nchans=%d" % (ms.getspectralwindowinfo()["0"]["NumChan"])',
              'print "inttime=%f" % (ms.getscansummary()["1"]["0"]["IntegrationTime"])',
+             'print "reffreq=%f" % (ms.getspectralwindowinfo()["0"]["RefFreq"])',
              'print ms.close()',
              't=casac.casac.table()',
              't.open("%s")' % msfile,
@@ -379,19 +380,26 @@ def get_msinfo(msfile):
     chanwidth=None
     inttime=None
     nchans=None
+    reffreq=None
     otherkeys={}
     for l in result[0]:
         if 'chanwidth' in l:
             chanwidth=float(l.split('=')[1])
+            logger.debug('Determined channel width of %d kHz for %s' % (chanwidth,msfile))
         elif 'inttime' in l:
             inttime=float(l.split('=')[1])
+            logger.debug('Determined integration time of %.1f s for %s' % (inttime,msfile))
         elif 'nchans' in l:
             nchans=int(l.split('=')[1])
+            logger.debug('Determined %d channels for %s' % (nchans,msfile))
+        elif 'reffreq' in l:
+            reffreq=float(l.split('=')[1])
+            logger.debug('Determined reference frequency of %.1f MHz for %s' % (reffreq/1e6,msfile))
         elif '=' in l:
             k,v=l.split('=')
             otherkeys[k]=v
 
-    return chanwidth, inttime, nchans, otherkeys
+    return chanwidth, inttime, nchans, reffreq, otherkeys
     
 ##################################################
 def check_calibrated(msfile):
@@ -852,6 +860,7 @@ class Observation(metadata.MWA_Observation):
         self.inttime=0
         self.chanwidth=0
         self.nchans=0
+        self.reffreq=0
         self.otherkeys={}
         self.autoprocesssources='None'
         self.centerchanged=False
@@ -877,7 +886,7 @@ class Observation(metadata.MWA_Observation):
         if result is None:
             logger.error('Cannot get info for MS file %s.ms' % self.obsid)
         else:
-            self.chanwidth, self.inttime, self.nchans, self.otherkeys=result
+            self.chanwidth, self.inttime, self.nchans, self.reffreq, self.otherkeys=result
         self.filestodelete=[]
 
     ##############################
@@ -1400,21 +1409,23 @@ class Observation(metadata.MWA_Observation):
                                     fm[0].header.comments[k])
                 except:
                     pass
-
             prev_inttime=f[0].header['INTTIME']
             prev_finechan=f[0].header['FINECHAN']
+            prev_nchan=f[0].header['NCHANS']
             f[0].header['INTTIME']=(self.inttime,'[s] Integration time')
             f[0].header['FINECHAN']=(self.chanwidth,'[kHz] Fine channel width')
+            f[0].header['NCHANS']=(self.nchans,
+                                   'Number of fine channels in spectrum')
             if prev_inttime != f[0].header['INTTIME']:
                 f[0].header['NSCANS']=int(f[0].header['NSCANS']*prev_inttime/f[0].header['INTTIME'])
                 logger.info('New integration time (%.1f s) differs from previous integration time (%.1f s): changing number of scans to %d' % (f[0].header['INTTIME'],
                                                                                                                                                prev_inttime,
                                                                                                                                                f[0].header['NSCANS']))
-            if prev_finechan != f[0].header['FINECHAN']:
-                f[0].header['NCHANS']=int(f[0].header['NCHANS']*prev_finechan/f[0].header['FINECHAN'])
-                logger.info('New final channel (%d kHz) differs from previous fine channel (%d kHz): changing number of channels to %d' % (f[0].header['FINECHAN'],
-                                                                                                                                           prev_finechan,
-                                                                                                                                           f[0].header['NCHANS']))
+                
+            f[0].header['BANDWDTH']=(self.nchans*self.chanwidth/1000,
+                                     '[MHz] Total bandwidth')
+            f[0].header['FREQCENT']=(self.reffreq/1e6,
+                                     '[MHz] Center frequency of observation')
             if subbands > 1:
                 try:
                     startchannel=f[0].header['WSCCHANS']
@@ -2155,10 +2166,10 @@ def main():
 
     eh=extra_utils.ExitHandler(os.path.split(sys.argv[0])[-1], email=options.notifyemail)
     logger.info('**************************************************')
-    logger.info('%s starting at %s UT on host %s with user %s' % (sys.argv[0],
-                                                                  datetime.datetime.now(),
-                                                                  socket.gethostname(),
-                                                                  os.environ['USER']))
+    logger.info('%s starting at %s on host %s with user %s' % (sys.argv[0],
+                                                               datetime.datetime.now(),
+                                                               socket.gethostname(),
+                                                               os.environ['USER']))
     logger.debug('In %s' % os.path.abspath(os.curdir))
     logger.debug('Command was:\n\t%s' % command)
     logger.info('**************************************************')
@@ -2511,10 +2522,10 @@ def main():
                         observations[observation_data[i]['obsid']].sources,rmsimage,bgimage=find_sources_in_image(Iimage, 
                                                                                                  max_summits=5,
                                                                                                  csigma=10)
-                        if rmsimage is not None:
-                            observations[observation_data[i]['obsid']].filestodelete.append(rmsimage)
-                        if bgimage is not None:
-                            observations[observation_data[i]['obsid']].filestodelete.append(bgimage)
+                        #if rmsimage is not None:
+                        #    observations[observation_data[i]['obsid']].filestodelete.append(rmsimage)
+                        #if bgimage is not None:
+                        #    observations[observation_data[i]['obsid']].filestodelete.append(bgimage)
 
                     except Exception,e:
                         logger.error('Unable to run aegean on %s:\n\t%s' % (Iimage,e))

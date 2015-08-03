@@ -1678,15 +1678,19 @@ class Observation(metadata.MWA_Observation):
 
                 prev_inttime=f[0].header['INTTIME']
                 prev_finechan=f[0].header['FINECHAN']
+                prev_nchan=f[0].header['NCHANS']   
+
                 f[0].header['INTTIME']=(self.inttime,'[s] Integration time')
                 f[0].header['FINECHAN']=(self.chanwidth,'[kHz] Fine channel width')
+                f[0].header['NCHANS']=(self.nchans,
+                                       'Number of fine channels in spectrum')
+
                 f[0].header['NSCANS']=int(integrationsperimage)
                 f[0].header['EXPOSURE']=(integrationsperimage*self.inttime,'[s] duration of observation')
-                if prev_finechan != f[0].header['FINECHAN']:
-                    f[0].header['NCHANS']=int(f[0].header['NCHANS']*prev_finechan/f[0].header['FINECHAN'])
-                    logger.info('New final channel (%d kHz) differs from previous fine channel (%d kHz): changing number of channels to %d' % (f[0].header['FINECHAN'],
-                                                                                                                                               prev_finechan,
-                                                                                                                                               f[0].header['NCHANS']))
+                f[0].header['BANDWDTH']=(self.nchans*self.chanwidth/1000,
+                                         '[MHz] Total bandwidth')
+                f[0].header['FREQCENT']=(self.reffreq/1e6,
+                                         '[MHz] Center frequency of observation')
             
                 f.verify('fix')
                 f.flush()

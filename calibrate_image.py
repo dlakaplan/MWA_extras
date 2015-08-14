@@ -15,7 +15,7 @@ To debug:
 
 import logging,logging.handlers,datetime,math,sys,socket,os,shutil,io
 from optparse import OptionParser,OptionGroup
-import time
+import time,tempfile
 import subprocess,fcntl
 from astropy.table import Table,Column
 import collections,glob,numpy
@@ -1535,6 +1535,7 @@ class Observation(metadata.MWA_Observation):
         logger.info('Will make %d images of %.1f s each' % (nimages, imagetime))
         commands=[]
         expected_outputs=[]
+        tempdirs=[]
         for i in xrange(nimages):
             expected_output=[]
             startindex=i*integrationsperimage
@@ -1546,7 +1547,6 @@ class Observation(metadata.MWA_Observation):
             ncpus=max(self.mincpus,self.ncpus/ntorun)
             mem=max(self.minmem,self.memfraction/ntorun)
             wscleancommand=['wsclean',
-                            '-no-reorder',
                             '-j',
                             str(ncpus),
                             '-mem',
@@ -1571,7 +1571,17 @@ class Observation(metadata.MWA_Observation):
                                  str(self.clean_mgain)]
                 if self.clean_mgain < 1 and ntorun>1:
                     logger.warning('Unable to run multiple wscleans in parallel because major cycles are requested.  Setting nprocess to 1...')
-                    ntorun=1
+                    #ntorun=1
+            # if we run multiple in parallel, 
+            # need to use tempdirs for reordering
+            if ntorun > 1:
+                #wscleancommand+=['-no-reorder']
+                tempdir=tempfile.mkdtemp(dir=self.basedir)
+                tempdirs.append(tempdir)
+                wscleancommand+=['-tempdir',
+                                 tempdir,
+                                 '-no-update-model-required']
+
             wscleancommand+=['-name',
                              name]
             if self.clean_minuv > 0:
@@ -1694,6 +1704,10 @@ class Observation(metadata.MWA_Observation):
             
                 f.verify('fix')
                 f.flush()
+
+        if len(tempdirs)>0:
+            for tempdir in tempdirs:
+                shutil.rmtree(tempdir)
 
         return self.rawfiles
 

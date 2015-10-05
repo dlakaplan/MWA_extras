@@ -456,7 +456,7 @@ class Observation():
                             '-o','%s.ms' % self.obsid]
         if self.useflagfiles and False:
             self.cottercommand+=['-flagfiles','%s_%%%%.mwaf' % self.obsid]
-        self.cottercommand+=['-norfi']
+        #self.cottercommand+=['-norfi']
         if phasecenter is not None:
             self.cottercommand+=['-centre',phasecenter.to_string('hmsdms').split()[0],
                                  phasecenter.to_string('hmsdms').split()[1]]
@@ -501,7 +501,7 @@ class Observation():
             return None
 
         newsize=get_size(self.msfile)
-        if math.fabs(newsize-self.mssize)/float(self.mssize) > 0.1:
+        if math.fabs(newsize-self.mssize)/float(self.mssize) > 0.75:
             logger.error('Expected a size of %d bytes for MSfile %s, but actual file has %d bytes' % (self.mssize,
                                                                                                       self.msfile,
                                                                                                       newsize))

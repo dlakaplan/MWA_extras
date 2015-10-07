@@ -40,7 +40,9 @@ except ImportError:
 
 try:
     import aegean
-    import BANE    
+    import BANE  
+    import MIMAS
+    from AegeanTools.regions import Region
     # make the logging output from aegean more reasonable
     logging.getLogger("Aegean").setLevel(logging.INFO)
     _aegean=True
@@ -218,6 +220,19 @@ def match_aegean_sources(sourcelist1, sourcelist2):
         S1.append(sourcelist1[I1[i]])
         S2.append(sourcelist2[I2[i]])
     return S1,S2
+
+##################################################
+def circle2mimas(ra, dec, radius, filename):
+    """
+    circle2mimas(ra, dec, radius)
+    ra,dec,radius in decimal regrees
+    """
+    r=Region()
+    r.add_circles(numpy.radians(ra),
+                  numpy.radians(dec),
+                  numpy.radians(radius))
+    MIMAS.save_region(r, filename)
+    return filename
 
 ##################################################
 class CASAfinder():
@@ -796,11 +811,12 @@ def identify_calibrators(observation_data):
 
 
 ######################################################################
-def find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True):
+def find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True, region=None):
     """
-    sources,rmsimage,bgimage=find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True)
+    sources,rmsimage,bgimage=find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True, region=None)
     runs aegean.find_sources_in_image
     but first runs BANE to get the BG/rms estimates
+    if region is supplied (.mim format) only sources inside that will be identified
     """
     if usebane:
         outbase=os.path.splitext(imagename)[0]
@@ -816,7 +832,8 @@ def find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True):
                                          max_summits=max_summits,
                                          csigma=csigma,
                                          rmsin=rmsimage,
-                                         bkgin=bgimage)
+                                         bkgin=bgimage,
+                                         mask=region)
     return sources,rmsimage,bgimage
 ######################################################################
 class Observation(metadata.MWA_Observation):
@@ -869,6 +886,7 @@ class Observation(metadata.MWA_Observation):
         self.nimages=1
         self.clean_threshold=None
         self.sources=[]
+        self.aegean_region=None
 
         self.mincpus=1
         self.minmem=3
@@ -2073,6 +2091,8 @@ def main():
     control_parser.add_option('--nofluxscale',dest='fluxscale',default=True,
                               action='store_false',
                               help='Do not scale the fluxes after selfcal using source finding?')    
+    control_parser.add_option('--fluxscaleregion',dest='fluxscaleregion',default=None,type='str',
+                              help='Region for flux scaling. Default is HPBW.  Can also be radius [deg] around pointing center or MIMAS region file')
     control_parser.add_option('--autosize',default=1,type='float',
                               help='Maximum possible size increase factor to include a bright source [default=%default]')
     imaging_parser.add_option('--size','--imagesize',dest='imagesize',default=2048,type='int',
@@ -2349,6 +2369,29 @@ def main():
                     logger.warning('Source %s is %.1f deg from field center of %d but outside imaged area; recommend increasing imaged area' % (source,distance.value,observations[obsid].observation_number))
                     increasesize=True
 
+        if options.fluxscaleregion is None:
+            # default is HPBW
+            regionradius=15*(150/(1.28*observations[obsid].center_channel))
+        else:
+            try:
+                regionradius=float(options.fluxscaleregion)
+            except ValueError:
+                if os.path.exists(options.fluxscaleregion):
+                    logger.info('Will use MIMAS region %s' % options.fluxscaleregion)
+                    observations[obsid].aegean_region=options.fluxscaleregion
+                    regionradius=None
+                else:
+                    logger.error('Unable to interpret region %s' % options.fluxscaleregion)
+                    eh.exit(1)
+        if regionradius is not None and observations[obsid].aegean_region is None:
+            observations[obsid].aegean_region=circle2mimas(observations[obsid].RA,observations[obsid].Dec,
+                                                           regionradius,
+                                                           '%d.mim' % obsid)
+            logger.info('Will use MIMAS region %s: circle(%.3f,%.3f,%.2f)' % (observations[obsid].aegean_region,
+                                                                             observations[obsid].RA,observations[obsid].Dec,
+                                                                             regionradius))
+                                   
+
     if increasesize and options.autosize>1:
         logger.warning('Increasing imaged area to %dx%d (%.1f deg)' % (options.imagesize*options.autosize,
                                                                        options.imagesize*options.autosize,
@@ -2538,8 +2581,9 @@ def main():
                 elif _aegean and options.fluxscale:
                     try:
                         observations[observation_data[i]['obsid']].sources,rmsimage,bgimage=find_sources_in_image(Iimage, 
-                                                                                                 max_summits=5,
-                                                                                                 csigma=10)
+                                                                                                                  max_summits=5,
+                                                                                                                  csigma=10,
+                                                                                                                  region=observations[observation_data[i]['obsid']].aegean_region)
                         #if rmsimage is not None:
                         #    observations[observation_data[i]['obsid']].filestodelete.append(rmsimage)
                         #if bgimage is not None:
@@ -2763,7 +2807,8 @@ def main():
                 try:
                     newsources,newrmsimage,newbgimage=find_sources_in_image(Iimage, 
                                                                             max_summits=5,
-                                                                            csigma=10)
+                                                                            csigma=10,
+                                                                            region=observations[observation_data[i]['obsid']].aegean_region)
                     if newrmsimage is not None:
                         observations[observation_data[i]['obsid']].filestodelete.append(newrmsimage)
                     if newbgimage is not None:

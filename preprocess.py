@@ -10,6 +10,7 @@ from astropy.time import Time
 from astropy.coordinates import SkyCoord
 import collections
 
+
 import extra_utils
 logger=extra_utils.makelogger('preprocess')
 
@@ -453,8 +454,9 @@ class Observation():
                             '-timeres',str(timeres),
                             '-freqres',str(freqres),
                             '-o','%s.ms' % self.obsid]
-        if self.useflagfiles:
+        if self.useflagfiles and False:
             self.cottercommand+=['-flagfiles','%s_%%%%.mwaf' % self.obsid]
+        #self.cottercommand+=['-norfi']
         if phasecenter is not None:
             self.cottercommand+=['-centre',phasecenter.to_string('hmsdms').split()[0],
                                  phasecenter.to_string('hmsdms').split()[1]]
@@ -477,6 +479,7 @@ class Observation():
                            stdout=subprocess.PIPE,
                            shell=True,
                            close_fds=False)
+        waserror=False
         while True:
             p.stdout.flush()
             p.stderr.flush()
@@ -484,14 +487,25 @@ class Observation():
                 logger.debug(l.rstrip())
             for l in p.stderr.readlines():
                 logger.error(l.rstrip())
+                waserror=True
             returncode=p.poll()
             if returncode is not None:
                 break
             time.sleep(1)
+        if waserror:
+            logger.error('Cotter had an error')
+            return None
+
         if not os.path.exists(self.msfile):
             logger.error('MSfile %s was not created' % self.msfile)
             return None
 
+        newsize=get_size(self.msfile)
+        if math.fabs(newsize-self.mssize)/float(self.mssize) > 0.75:
+            logger.error('Expected a size of %d bytes for MSfile %s, but actual file has %d bytes' % (self.mssize,
+                                                                                                      self.msfile,
+                                                                                                      newsize))
+            return None
         self.mssize=get_size(self.msfile)
         logger.info('MSfile %s was created with size %d bytes' % (self.msfile,self.mssize))
         return self.mssize

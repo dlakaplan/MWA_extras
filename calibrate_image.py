@@ -494,7 +494,7 @@ def calibrate_casa(obsid, directory=None, minuv=60):
     try:
         casa = drivecasa.Casapy(casa_dir=casapy,
                                 working_dir=basedir,
-                                timeout=1200)
+                                timeout=3600)
     except Exception, e:
         logger.error('Unable to instantiate casa:\n%s' % e)
         return None
@@ -550,7 +550,7 @@ def selfcalibrate_casa(obsid, suffix=None, directory=None, minuv=60):
     try:
         casa = drivecasa.Casapy(casa_dir=casapy,
                                 working_dir=basedir,
-                                timeout=1200)
+                                timeout=3600)
     except Exception, e:
         logger.error('Unable to instantiate casa:\n%s' % e)
         return None
@@ -595,7 +595,7 @@ def applycal_casa(obsid, calfile):
     try:
         casa = drivecasa.Casapy(casa_dir=casapy,
                                 working_dir=basedir,
-                                 timeout=1200)
+                                 timeout=3600)
 
     except Exception, e:
         logger.error('Unable to instantiate casa:\n%s' % e)
@@ -1398,7 +1398,7 @@ class Observation(metadata.MWA_Observation):
             try:
                 f=fits.open(file,'update')
             except Exception,e:
-                logger.open('Unable to open image output %s for updating:\n\t%s' % (file,e))
+                logger.error('Unable to open image output %s for updating:\n\t%s' % (file,e))
                 return None
 
             f[0].header['CALTYPE']=(self.caltype,'Calibration type')
@@ -1412,6 +1412,10 @@ class Observation(metadata.MWA_Observation):
             f[0].header['CHGCENTR']=self.centerchanged
             f[0].header['SELFCAL']=self.selfcal
             med,rms=stat_measure(f)
+            if numpy.isnan(rms):
+                logger.error('RMS of %s is NaN' % file)
+                return None
+
             f[0].header['IMAGERMS']=(rms,'[Jy/beam] Image RMS')
             try:
                 f[0].header.add_history(' '.join(self.wscleancommand))
@@ -1674,7 +1678,7 @@ class Observation(metadata.MWA_Observation):
                 try:
                     f=fits.open(file,'update')
                 except Exception,e:
-                    logger.open('Unable to open image output %s for updating:\n\t%s' % (file,e))
+                    logger.error('Unable to open image output %s for updating:\n\t%s' % (file,e))
                     return None
 
                 f[0].header['CALTYPE']=(self.caltype,'Calibration type')
@@ -1688,6 +1692,10 @@ class Observation(metadata.MWA_Observation):
                 f[0].header['CHGCENTR']=self.centerchanged
                 f[0].header['SELFCAL']=self.selfcal
                 med,rms=stat_measure(f)
+                if numpy.isnan(rms):
+                    logger.error('RMS of %s is NaN' % file)
+                    return None
+
                 f[0].header['IMAGERMS']=(rms,'[Jy/beam] Image RMS')
 
                 f[0].header.add_history(commands[i])
@@ -1924,7 +1932,7 @@ class Observation(metadata.MWA_Observation):
             try:
                 f=fits.open(file,'update')
             except Exception,e:
-                logger.open('Unable to open image output %s for updating:\n\t%s' % (file,e))
+                logger.error('Unable to open image output %s for updating:\n\t%s' % (file,e))
                 return None
             f[0].header['PBMODEL']=(self.beammodel,'Primary beam model')
 
@@ -1936,6 +1944,9 @@ class Observation(metadata.MWA_Observation):
                 logger.error('Unable to open file %s:\n\t%s' % (self.rawfiles[ifile],e))
 
             med,rms=stat_measure(f)
+            if numpy.isnan(rms):
+                logger.error('RMS of %s is NaN' % file)
+                return None
             f[0].header['IMAGERMS']=(rms,'[Jy/beam] Image RMS')
             for k in fraw[0].header.keys():
                 if not k in f[0].header.keys():

@@ -23,7 +23,7 @@ def issamenight(obsid1, obsid2):
     """
     t1=Time(obsid1, format='gps', scale='utc')
     t2=Time(obsid2, format='gps', scale='utc')
-    if int(t1.jd)==int(t2.jd) and t1.datetime.hour>=10 and t2.datetime.hour>=10 and t1.datetime.hour<=22 and t2.datetime.hour<=22:
+    if int(t1.jd)==int(t2.jd) and t1.datetime.hour>=10 and t2.datetime.hour>=10 and t1.datetime.hour<=24 and t2.datetime.hour<=24:
         return True
     return False
 
@@ -111,7 +111,7 @@ def find_calibrator(obsid,
         separation=basepointing.separation(pointing)
         good=True
         good=good and separation < maxseparation
-        good=good and Time(obs.obsid,format='gps',scale='utc')-basetime<maxtimediff
+        good=good and numpy.abs(Time(obs.obsid,format='gps',scale='utc')-basetime)<maxtimediff
         good=good and (not matchnight or issamenight(baseobs.observation_number, obs.obsid))
         if len(notsourcename)>0:
             for s in notsourcename:
@@ -123,6 +123,8 @@ def find_calibrator(obsid,
         goodlist[i]['obsname']=obs.obsname
 
     goodlist=goodlist[goodlist['good']]
+    if len(goodlist)==0:
+        return None
     if priority=='time':
         goodlist=numpy.sort(goodlist, order='timediff')
     elif priority=='distance':

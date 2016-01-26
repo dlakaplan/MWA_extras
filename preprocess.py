@@ -454,7 +454,7 @@ class Observation():
                             '-timeres',str(timeres),
                             '-freqres',str(freqres),
                             '-o','%s.ms' % self.obsid]
-        if self.useflagfiles and False:
+        if self.useflagfiles:
             self.cottercommand+=['-flagfiles','%s_%%%%.mwaf' % self.obsid]
         #self.cottercommand+=['-norfi']
         if phasecenter is not None:
@@ -463,7 +463,7 @@ class Observation():
                                  
         if allowmissing:
             self.cottercommand+=['-allowmissing']
-        self.cottercommand+=['*.fits']        
+        self.cottercommand+=['*gpubox*.fits']        
         self.msfile='%s.ms' % self.obsid
         if os.path.exists(self.msfile):
             if not self.clobber:

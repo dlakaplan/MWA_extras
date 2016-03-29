@@ -442,6 +442,8 @@ def main():
     parser.add_option('--plot',action="store_true",dest="plot",default=False,
                       help="Save diagnostic plots?")
 
+    parser.add_option('-m','--cores',default=1,type='int',dest='cores',
+                      help='Number of cores for Aegean [default=%default]')
     parser.add_option('-v','--verbose',action="store_true",dest="verbose",default=False,
                       help="Increase verbosity of output")
     (options, args) = parser.parse_args()

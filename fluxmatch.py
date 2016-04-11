@@ -1,3 +1,6 @@
+import matplotlib
+matplotlib.use('PDF')
+from matplotlib import pyplot as plt
 import numpy,os,sys,logging
 from optparse import OptionParser
 import astropy
@@ -8,8 +11,7 @@ from astropy.io import fits
 from astropy.wcs import WCS
 import aegean,BANE,MIMAS
 from AegeanTools.regions import Region
-from matplotlib import pyplot as plt
-import matplotlib
+
 import mwapy
 from mwapy.pb import make_beam
 
@@ -73,7 +75,7 @@ def aegean2table(sources):
     sourcesTable=Table([ra,dec,peakflux,peakfluxerr,intflux,intfluxerr,rms])
     return sourcesTable
 ######################################################################
-def make_beam(image):
+def find_beam(image):
     f=fits.open(image)
     if 'BEAM' in f[0].header.keys():
         if os.path.exists(f[0].header['BEAM']):
@@ -81,7 +83,8 @@ def make_beam(image):
             return f[0].header['BEAM']
     if not 'DELAYS' in f[0].header.keys():
         return None
-    delays=[int(x) for x in fx[0].header['DELAYS'].split(',')]
+    delays=[int(x) for x in f[0].header['DELAYS'].split(',')]
+    logger.info('Creating primary beam for %s' % image)
     out=make_beam.make_beam(image, ext=0,
                             delays=delays,
                             analytic_model=True,
@@ -97,7 +100,7 @@ def make_beam(image):
         # I
         fXX=fits.open(out[0])
         fYY=fits.open(out[1])
-        fXX[0].data=0.5*(fXX[0].data+fYY[1].data)
+        fXX[0].data=0.5*(fXX[0].data+fYY[0].data)
         fXX[0].header['CRVAL4']=1
         out=out[0].replace('_beamXX','_beamI')
         if os.path.exists(out):
@@ -148,7 +151,7 @@ def fluxmatch(image,
     if not os.path.exists(catalog):
         logger.error('Cannot find GLEAM catalog %s' % catalog)
         return None
-    beam=make_beam(image)
+    beam=find_beam(image)
     if beam is None:
         logger.warning('Did not generate primary beam: will ignore')
         minbeam=None
@@ -317,18 +320,27 @@ def fluxmatch(image,
 
 
     if update:
-        fimage=fits.open(image,'update')
-        fimage[0].data/=fittedratio
-        fimage[0].header['FLUXSCAL']=(fittedratio,'Flux scaling relative to catalog')
-        fimage[0].header['FLUX_ERR']=(fittedratioerr,'Flux scaling uncertainty relative to catalog')
-        fimage[0].header['FLUXCAT']=(catalog,'Flux scaling catalog')
-        fimage[0].header['NFLUXSRC']=(good.sum(),'Number of sources used for flux scaling')
-        fimage[0].header['FLUXCHI2']=(chisq,'Flux scaling chi-squared')
-        fimage[0].header['FLUXSLOP']=(fitres[0],'Flux scaling slope')
-        if 'IMAGERMS' in fimage[0].header.keys():
-            fimage[0].header['IMAGERMS']/=fittedratio
-        fimage.flush()
-        logger.info('Scaled %s by %.3f' % (image,fittedratio))
+        if fittedratio > 2 or fittedratio < 0.5:
+            logger.warning('Ratio exceeds reasonable limits; skipping...')
+        else:
+            fimage=fits.open(image,'update')
+            fimage[0].data/=fittedratio
+            fimage[0].header['FLUXSCAL']=(fittedratio,'Flux scaling relative to catalog')
+            fimage[0].header['FLUX_ERR']=(fittedratioerr,'Flux scaling uncertainty relative to catalog')
+            fimage[0].header['FLUXCAT']=(catalog,'Flux scaling catalog')
+            fimage[0].header['NFLUXSRC']=(good.sum(),'Number of sources used for flux scaling')
+            fimage[0].header['FLUXCHI2']=(chisq,'Flux scaling chi-squared')
+            fimage[0].header['FLUXSLOP']=(fitres[0],'Flux scaling slope')
+            if refineposition:
+                fimage[0].header['RASHIFT']=(dRA[good].mean()*3600,'[s] RA Shift for catalog match')
+                fimage[0].header['DECSHIFT']=(dDEC[good].mean()*3600,'[arcsec] DEC Shift for catalog match')
+                fimage[0].header['CRVAL1']-=dRA[good].mean()
+                fimage[0].header['CRVAL2']-=dDEC[good].mean()
+
+            if 'IMAGERMS' in fimage[0].header.keys():
+                fimage[0].header['IMAGERMS']/=fittedratio
+            fimage.flush()
+            logger.info('Scaled %s by %.3f' % (image,fittedratio))
         
 
     if plot:

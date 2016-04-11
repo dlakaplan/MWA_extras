@@ -81,7 +81,7 @@ def make_beam(image):
             return f[0].header['BEAM']
     if not 'DELAYS' in f[0].header.keys():
         return None
-    delays=[int(x) for x in fx[0].header['DELAYS'].split(',')]
+    delays=[int(x) for x in f[0].header['DELAYS'].split(',')]
     out=make_beam.make_beam(image, ext=0,
                             delays=delays,
                             analytic_model=True,
@@ -256,7 +256,9 @@ def fluxmatch(image,
             good=good & (sourcesTable['RMS']<=rmsfactor*minrms)
             logger.info('%04d/%04d sources also have RMS < %.1f mJy' % (good.sum(),
                                                                         len(good),
-                                                                        rmsfactor*minrms*1e3))
+                                                                        rmsfactor*minrms*1e3))        
+
+
         # distance from pointing center
         if maxdistance is not None and maxdistance>0:
             good=good & (sourcesTable['SOURCEDIST'] < maxdistance)
@@ -271,8 +273,12 @@ def fluxmatch(image,
         # require that all sources are > 5 sigma detections
         # and that flux uncertainties are > 0
         good=good & (sourcesTable['IntFluxErr']<0.2*sourcesTable['IntFlux']) & (sourcesTable['IntFluxErr']>0) & (sourcesTable['GLEAMFluxErr']>0) & (sourcesTable['GLEAMFluxErr']<0.2*sourcesTable['GLEAMFlux'])
+        good=good & (sourcesTable['GLEAMFlux']>=sourcesTable['IntFlux'][good].min())
         logger.info('%04d/%04d sources match all cuts' % (good.sum(),
                                                           len(good)))
+        if good.sum()<5:
+            logger.error('Insufficient sources for flux scaling')
+            return None
 
         fitres=numpy.polyfit(sourcesTable['GLEAMFlux'][good],
                              sourcesTable['IntFlux'][good],
@@ -333,6 +339,8 @@ def fluxmatch(image,
 
     if plot:
 
+        imagename=image.replace('_','\_')
+
         plt.clf()
         xx=numpy.logspace(-2,10)
         plt.loglog(xx,xx*fittedratio,'r')
@@ -347,14 +355,14 @@ def fluxmatch(image,
         #plt.gca().set_yscale('log')
         plt.axis([0.1,2,0.1,2])
         plt.xlabel('Flux Density in %s (Jy)' % catalog,fontsize=16)
-        plt.ylabel('Flux Density in %s (Jy)' % image,fontsize=16)
+        plt.ylabel('Flux Density in %s (Jy)' % imagename,fontsize=16)
         plt.gca().tick_params(labelsize=16)
         plt.savefig('%s_fluxflux.pdf' % outbase)
         logger.info('Wrote %s_fluxflux.pdf' % outbase)
 
         plt.clf()
         plt.hist(ratio[good],30)
-        plt.xlabel('Flux Density in %s / Flux Density in %s' % (image,catalog),
+        plt.xlabel('Flux Density in %s / Flux Density in %s' % (imagename,catalog),
                    fontsize=16)
         plt.ylabel('Number of Sources',fontsize=16)
         plt.plot(fittedratio*numpy.array([1,1]),
@@ -382,8 +390,8 @@ def fluxmatch(image,
                  'ro')
         plt.plot(plt.gca().get_xlim(),[0,0],'k--')
         plt.plot([0,0],plt.gca().get_ylim(),'k--')
-        plt.xlabel('$\\alpha$(%s)-$\\alpha$(%s)' % (image,catalog),fontsize=16)
-        plt.ylabel('$\\delta$(%s)-$\\delta$(%s)' % (image,catalog),fontsize=16)
+        plt.xlabel('$\\alpha$(%s)-$\\alpha$(%s)' % (imagename,catalog),fontsize=16)
+        plt.ylabel('$\\delta$(%s)-$\\delta$(%s)' % (imagename,catalog),fontsize=16)
         plt.gca().tick_params(labelsize=16)
         plt.savefig('%s_position.pdf' % outbase)
         logger.info('Wrote %s_position.pdf' % outbase)    
@@ -397,7 +405,7 @@ def fluxmatch(image,
         plt.plot(matchradius.to(u.arcsec).value*numpy.array([1,1]),
                  plt.gca().get_ylim(),
                  'k--')
-        plt.xlabel('Separation %s vs. %s (arcsec)' % (image,catalog),
+        plt.xlabel('Separation %s vs. %s (arcsec)' % (imagename,catalog),
                    fontsize=16)
         plt.ylabel('Number of sources',fontsize=16)
         plt.gca().tick_params(labelsize=16)

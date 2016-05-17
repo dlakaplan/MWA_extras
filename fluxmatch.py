@@ -338,6 +338,21 @@ def fluxmatch(image,
     sourcesTable.write(outbase + '_fluxmatch.hdf5',path='data')
     logger.info('Wrote %s_fluxmatch.hdf5' % outbase)
 
+    outreg=outbase + '_fluxmatch.reg'
+    if os.path.exists(outreg):
+        os.remove(outreg)
+    foutreg=open(outreg,'w')
+    for i in xrange(len(sourcesTable)):
+        if sourcesTable[i]['GOOD']:
+            foutreg.write('icrs;circle(%f,%f,60") # text={%03d} color={green}\n' % (sourcesTable[i]['RA'],
+                                                                                    sourcesTable[i]['Dec'],
+                                                                                    i))
+        else:
+            foutreg.write('icrs;box(%f,%f,60",60",0) # text={%03d} color={red}\n' % (sourcesTable[i]['RA'],
+                                                                                     sourcesTable[i]['Dec'],
+                                                                                     i))
+    logger.info('Wrote %s' % outreg)
+    foutreg.close()
 
     if update:
         if fittedratio > 2 or fittedratio < 0.5:

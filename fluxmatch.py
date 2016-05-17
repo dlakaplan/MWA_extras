@@ -14,7 +14,7 @@ from AegeanTools.regions import Region
 
 import mwapy
 from mwapy.pb import make_beam
-
+from mwapy import metadata
 
 # configure the logging
 logging.basicConfig(format='# %(levelname)s:%(name)s: %(message)s')
@@ -183,8 +183,22 @@ def fluxmatch(image,
     x,y=w.wcs_world2pix(sourcesTable['RA'],sourcesTable['Dec'],0)
     sourcesTable.add_column(Column(x,name='X'))
     sourcesTable.add_column(Column(y,name='Y'))
-    pointingcenter=SkyCoord(fimage[0].header['RA'],fimage[0].header['DEC'],
-                            unit=('deg','deg'))
+    if 'RA' in fimage[0].header.keys():
+        pointingcenter=SkyCoord(fimage[0].header['RA'],fimage[0].header['DEC'],
+                                unit=('deg','deg'))
+    else:
+        # get the pointing center from the metadata
+        logger.warning('Pointing metadata not present in header; retrieving...')
+        try:
+            obs=metadata.MWA_Observation(fimage[0].header['GPSTIME'])
+            logger.info('Found pointing center %f,%f' % (obs.RA,obs.Dec))
+            pointingcenter=SkyCoord(obs.RA,obs.Dec,
+                                    unit=('deg','deg'))
+        except:
+            logger.warning('Using CRVAL1/CRVAL2 for pointing center')
+            pointingcenter=SkyCoord(fimage[0].header['CRVAL1'],fimage[0].header['CRVAL2'],
+                                    unit=('deg','deg'))
+
     coords=SkyCoord(sourcesTable['RA'],sourcesTable['Dec'],unit=(u.deg,u.deg))
     sourcesTable.add_column(Column(coords.separation(pointingcenter).to(u.deg),
                                    name='SOURCEDIST'))
@@ -365,7 +379,7 @@ def fluxmatch(image,
                      fmt='b.')
         #plt.gca().set_xscale('log')
         #plt.gca().set_yscale('log')
-        plt.axis([0.1,2,0.1,2])
+        plt.axis([0.1,100,0.1,100])
         plt.xlabel('Flux Density in %s (Jy)' % catalog,fontsize=16)
         plt.ylabel('Flux Density in %s (Jy)' % imagename,fontsize=16)
         plt.gca().tick_params(labelsize=16)

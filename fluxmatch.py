@@ -121,6 +121,7 @@ def fluxmatch(image,
               refineposition=False,
               update=False,
               plot=True,
+              region=True,
               cores=1):
     """
     catalog='GLEAMIDR3.fits',
@@ -338,21 +339,22 @@ def fluxmatch(image,
     sourcesTable.write(outbase + '_fluxmatch.hdf5',path='data')
     logger.info('Wrote %s_fluxmatch.hdf5' % outbase)
 
-    outreg=outbase + '_fluxmatch.reg'
-    if os.path.exists(outreg):
-        os.remove(outreg)
-    foutreg=open(outreg,'w')
-    for i in xrange(len(sourcesTable)):
-        if sourcesTable[i]['GOOD']:
-            foutreg.write('icrs;circle(%f,%f,60") # text={%03d} color={green}\n' % (sourcesTable[i]['RA'],
-                                                                                    sourcesTable[i]['Dec'],
-                                                                                    i))
-        else:
-            foutreg.write('icrs;box(%f,%f,60",60",0) # text={%03d} color={red}\n' % (sourcesTable[i]['RA'],
-                                                                                     sourcesTable[i]['Dec'],
-                                                                                     i))
-    logger.info('Wrote %s' % outreg)
-    foutreg.close()
+    if region:
+        outreg=outbase + '_fluxmatch.reg'
+        if os.path.exists(outreg):
+            os.remove(outreg)
+        foutreg=open(outreg,'w')
+        for i in xrange(len(sourcesTable)):
+            if sourcesTable[i]['GOOD']:
+                foutreg.write('icrs;circle(%f,%f,60") # text={%03d} color={green}\n' % (sourcesTable[i]['RA'],
+                                                                                        sourcesTable[i]['Dec'],
+                                                                                        i))
+            else:
+                foutreg.write('icrs;box(%f,%f,60",60",0) # text={%03d} color={red}\n' % (sourcesTable[i]['RA'],
+                                                                                         sourcesTable[i]['Dec'],
+                                                                                         i))
+        logger.info('Wrote %s' % outreg)
+        foutreg.close()
 
     if update:
         if fittedratio > 2 or fittedratio < 0.5:
@@ -490,7 +492,8 @@ def main():
                       help="Refine positions?")
     parser.add_option('--plot',action="store_true",dest="plot",default=False,
                       help="Save diagnostic plots?")
-
+    parser.add_option('--region',action="store_true",dest="region",default=False,
+                      help="Save ds9 region?")
     parser.add_option('-m','--cores',default=1,type='int',dest='cores',
                       help='Number of cores for Aegean [default=%default]')
     parser.add_option('-v','--verbose',action="store_true",dest="verbose",default=False,
@@ -513,7 +516,8 @@ def main():
                       rejectsigma=options.rejectsigma,
                       update=options.update,
                       refineposition=options.refineposition,
-                      plot=options.plot)
+                      plot=options.plot,
+                      region=options.region)
 
 
         

@@ -36,10 +36,10 @@ def get_rms_background(imagename, cores=16):
     return rmsimage, bgimage
     
 ######################################################################
-def find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True,
+def find_sources_in_image(imagename, max_summits=5, innerclip=10, usebane=True,
                           region=None, cores=16):
     """
-    sources,rmsimage,bgimage=find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True, region=None, cores=16)
+    sources,rmsimage,bgimage=find_sources_in_image(imagename, max_summits=5, innerclip=10, usebane=True, region=None, cores=16)
     runs aegean.find_sources_in_image
     but first runs BANE to get the BG/rms estimates
     if region is supplied (.mim format) only sources inside that will be identified
@@ -51,7 +51,7 @@ def find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True,
 
     sources=aegean.find_sources_in_image(imagename,
                                          max_summits=max_summits,
-                                         csigma=csigma,
+                                         innerclip=innerclip,
                                          rmsin=rmsimage,
                                          bkgin=bgimage,
                                          mask=region,
@@ -162,7 +162,7 @@ def fluxmatch(image,
         beam=None
     outbase=os.path.splitext(image)[0]           
     sources, rmsimage, bgimage=find_sources_in_image(image,
-                                                     csigma=nsigma,
+                                                     innerclip=nsigma,
                                                      cores=cores)
     logger.info('Found %d sources above %d sigma in %s' % (len(sources),
                                                            nsigma,

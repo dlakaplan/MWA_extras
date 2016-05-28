@@ -210,9 +210,21 @@ def fluxmatch(image,
     else:
         sourcesTable.add_column(Column(0*x,
                                        name='BEAM'))
-        
-    fcatalog=fits.open(catalog)
-    catalogTable=Table(fcatalog[1].data)
+
+    if '.fits' in catalog:
+        # this seems to be faster than going straight to the Table.read()
+        try:
+            fcatalog=fits.open(catalog)
+        except:
+            logger.error('Unable to open FITS catalog %s' % catalog)
+            return None
+        catalogTable=Table(fcatalog[1].data)
+    else:
+        try:
+            catalogTable=Table.read(catalog)
+        except:
+            logger.error('Unable to read catalog %s' % catalog)
+            return None        
     bandfrequencies=numpy.array([int(s.split('_')[-1]) for s in numpy.array(catalogTable.colnames)[numpy.nonzero(numpy.array([('int_flux' in c) and not ('deep' in c) for c in catalogTable.colnames]))[0]]])
 
     # find the indices of the bands just above and below the observation

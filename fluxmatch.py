@@ -118,6 +118,7 @@ def fluxmatch(image,
               maxdistance=20,
               minbeam=0.5,
               psfextent=1.1,
+              limit=10,
               refineposition=False,
               update=False,
               plot=True,
@@ -139,6 +140,8 @@ def fluxmatch(image,
     minbeam=0.5,
     area of source/area of psf threshold
     psfextent=1.1,
+    max ratio of new to old fluxes (or reciprocal)
+    limit=10,
     """
 
     if not isinstance(matchradius,astropy.units.quantity.Quantity):
@@ -214,18 +217,28 @@ def fluxmatch(image,
     fcatalog=fits.open(catalog)
     catalogTable=Table(fcatalog[1].data)
     bandfrequencies=numpy.array([int(s.split('_')[-1]) for s in numpy.array(catalogTable.colnames)[numpy.nonzero(numpy.array([('int_flux' in c) and not ('deep' in c) for c in catalogTable.colnames]))[0]]])
-
-    # find the indices of the bands just above and below the observation
-    # linearly weight the fluxes just above and below to match
-    # the observation frequency
-    indexplus=(bandfrequencies>=frequency/1e6).nonzero()[0].min()
-    indexminus=(bandfrequencies<frequency/1e6).nonzero()[0].max()
-    logger.info('Observation frequency of %.1f MHz: interpolating between %d MHz and %d MHz' % (frequency/1e6,bandfrequencies[indexminus],bandfrequencies[indexplus]))
     
-    weightplus=(frequency/1e6-bandfrequencies[indexminus])/(bandfrequencies[indexplus]-bandfrequencies[indexminus])
-    weightminus=1-weightplus
-    gleamflux=catalogTable['int_flux_%03d' % bandfrequencies[indexminus]]*weightminus+catalogTable['int_flux_%03d' % bandfrequencies[indexplus]]*weightplus
-    gleamfluxerr=numpy.sqrt((catalogTable['err_fit_flux_%03d' % bandfrequencies[indexminus]]*weightminus)**2+(catalogTable['err_fit_flux_%03d' % bandfrequencies[indexplus]]*weightplus)**2)
+    if len(bandfrequencies)>0:
+        # find the indices of the bands just above and below the observation
+        # linearly weight the fluxes just above and below to match
+        # the observation frequency
+        indexplus=(bandfrequencies>=frequency/1e6).nonzero()[0].min()
+        indexminus=(bandfrequencies<frequency/1e6).nonzero()[0].max()
+        logger.info('Observation frequency of %.1f MHz: interpolating between %d MHz and %d MHz' % (frequency/1e6,bandfrequencies[indexminus],bandfrequencies[indexplus]))
+    
+        weightplus=(frequency/1e6-bandfrequencies[indexminus])/(bandfrequencies[indexplus]-bandfrequencies[indexminus])
+        weightminus=1-weightplus
+        gleamflux=catalogTable['int_flux_%03d' % bandfrequencies[indexminus]]*weightminus+catalogTable['int_flux_%03d' % bandfrequencies[indexplus]]*weightplus
+        gleamfluxerr=numpy.sqrt((catalogTable['err_fit_flux_%03d' % bandfrequencies[indexminus]]*weightminus)**2+(catalogTable['err_fit_flux_%03d' % bandfrequencies[indexplus]]*weightplus)**2)
+    else:
+        logger.warning('Could not identify GLEAM band fluxes')
+        if 'FLUX' in catalogTable.colnames and 'FLUXERR' in catalogTable.colnames:
+            logger.warning('Using FLUX and FLUXERR columns')
+            gleamflux=catalogTable['FLUX']
+            gleamfluxerr=catalogTable['FLUXERR']
+        else:
+            logger.error('Could not identify flux columns to use')
+            return None
 
     catalogcoords=SkyCoord(catalogTable['RAJ2000'],
                            catalogTable['DECJ2000'],unit=(u.deg,u.deg))
@@ -244,11 +257,13 @@ def fluxmatch(image,
                                    name='GLEAMFlux'))
     sourcesTable.add_column(Column(gleamfluxerr[idx],
                                    name='GLEAMFluxErr'))
-    sourcesTable.add_column(Column(catalogTable['psf_a_%03d' % bandfrequencies[indexplus]][idx] * catalogTable['psf_b_%03d' % bandfrequencies[indexplus]][idx],
-                                   name='PSFAREA'))
-    sourcesTable.add_column(Column(catalogTable['a_%03d' % bandfrequencies[indexplus]][idx] * catalogTable['b_%03d' % bandfrequencies[indexplus]][idx],
-                                   name='SOURCEAREA'))
-
+    try:
+        sourcesTable.add_column(Column(catalogTable['psf_a_%03d' % bandfrequencies[indexplus]][idx] * catalogTable['psf_b_%03d' % bandfrequencies[indexplus]][idx],
+                                       name='PSFAREA'))
+        sourcesTable.add_column(Column(catalogTable['a_%03d' % bandfrequencies[indexplus]][idx] * catalogTable['b_%03d' % bandfrequencies[indexplus]][idx],
+                                       name='SOURCEAREA'))
+    except:
+        pass
     dRA=(sourcesTable['RA']-sourcesTable['GLEAMRA'])
     dDEC=(sourcesTable['Dec']-sourcesTable['GLEAMDEC'])
     iterations=1
@@ -357,7 +372,7 @@ def fluxmatch(image,
         foutreg.close()
 
     if update:
-        if fittedratio > 2 or fittedratio < 0.5:
+        if fittedratio > limit or fittedratio < 1.0/limit:
             logger.warning('Ratio exceeds reasonable limits; skipping...')
         else:
             fimage=fits.open(image,'update')
@@ -486,6 +501,8 @@ def main():
                       help='Max source / PSF extent [default=%default]')
     parser.add_option('--rejectsigma',dest='rejectsigma',default=3,type='float',
                       help='Sigma clipping threshold [default=%default]')
+    parser.add_option('--limit',dest='ratiolimit',default=10,type='float',
+                      help='Max ratio of new to old fluxes (or old to new) [default=%default]')
     parser.add_option('--update',action="store_true",dest='update',default=False,
                       help="Update original FITS image?")
     parser.add_option('--refineposition',dest='refineposition',default=False,action='store_true',
@@ -513,6 +530,7 @@ def main():
                       maxdistance=options.maxdistance,
                       minbeam=options.minbeam,
                       psfextent=options.psfextent,
+                      limit=options.ratiolimit,
                       rejectsigma=options.rejectsigma,
                       update=options.update,
                       refineposition=options.refineposition,

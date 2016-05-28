@@ -111,6 +111,8 @@ def find_beam(image):
 ######################################################################
 def fluxmatch(image,
               catalog='GLEAMIDR3.fits',
+              fluxcolumn=None,
+              fluxerrcolumn=None,
               nsigma=10,
               rmsfactor=3,
               matchradius=120,
@@ -126,6 +128,8 @@ def fluxmatch(image,
               cores=1):
     """
     catalog='GLEAMIDR3.fits',
+    fluxcolumn=None,
+    fluxerrcolumn=None,
     signal-to-noise for source finding
     nsigma=10,
     ratio of local rms to minimum image RMS that is OK
@@ -244,10 +248,13 @@ def fluxmatch(image,
         gleamfluxerr=numpy.sqrt((catalogTable['err_fit_flux_%03d' % bandfrequencies[indexminus]]*weightminus)**2+(catalogTable['err_fit_flux_%03d' % bandfrequencies[indexplus]]*weightplus)**2)
     else:
         logger.warning('Could not identify GLEAM band fluxes')
-        if 'FLUX' in catalogTable.colnames and 'FLUXERR' in catalogTable.colnames:
-            logger.warning('Using FLUX and FLUXERR columns')
-            gleamflux=catalogTable['FLUX']
-            gleamfluxerr=catalogTable['FLUXERR']
+        if fluxcolumn is None:
+            logger.error('Could not identify flux columns to use')
+            return None            
+        if fluxcolumn in catalogTable.colnames and fluxerrcolumn in catalogTable.colnames:
+            logger.warning('Using %s and %s columns' % (fluxcolumn,fluxerrcolumn))
+            gleamflux=catalogTable[fluxcolumn]
+            gleamfluxerr=catalogTable[fluxerrcolumn]
         else:
             logger.error('Could not identify flux columns to use')
             return None
@@ -499,6 +506,10 @@ def main():
     parser = OptionParser(usage=usage,version=mwapy.__version__ + ' ' + mwapy.__date__)
     parser.add_option('-c','--catalog',dest='catalog',default='GLEAMIDR3.fits',
                       help='Location of GLEAM catalog file [default=%default]')
+    parser.add_option('--fluxcol',dest='fluxcolumn',default='FLUX',
+                      help='Column for flux density if not GLEAM standard [default=%default]')
+    parser.add_option('--fluxerrcol',dest='fluxerrcolumn',default='FLUXERR',
+                      help='Column for flux density errors if not GLEAM standard [default=%default]')
     parser.add_option('--nsigma',dest='nsigma',default=10,type='float',
                       help='Threshold in sigma for source finding [default=%default]')
     parser.add_option('--match',dest='matchradius',default=60,type='float',
@@ -536,6 +547,8 @@ def main():
     for file in args:
         out=fluxmatch(file,
                       catalog=options.catalog,
+                      fluxcolumn=options.fluxcolumn,
+                      fluxerrcolumn=options.fluxerrcolumn,
                       nsigma=options.nsigma,
                       matchradius=options.matchradius,
                       rmsfactor=options.rmsfactor,

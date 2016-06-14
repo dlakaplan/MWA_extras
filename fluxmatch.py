@@ -262,8 +262,13 @@ def fluxmatch(image,
             logger.error('Could not identify flux columns to use')
             return None
 
-    catalogcoords=SkyCoord(catalogTable['RAJ2000'],
-                           catalogTable['DECJ2000'],unit=(u.deg,u.deg))
+    try:
+        catalogcoords=SkyCoord(catalogTable['RAJ2000'],
+                               catalogTable['DECJ2000'],unit=(u.deg,u.deg))
+    except KeyError:
+        catalogcoords=SkyCoord(catalogTable['RAJ2000'],
+                               catalogTable['DEJ2000'],unit=(u.deg,u.deg))
+
     # match the catalog to the data
     idx,sep2d,sep3d=coords.match_to_catalog_sky(catalogcoords)
     # add the matched columns to the soure table
@@ -271,8 +276,12 @@ def fluxmatch(image,
                                    name='Name'))
     sourcesTable.add_column(Column(catalogTable['RAJ2000'][idx],
                                    name='GLEAMRA'))
-    sourcesTable.add_column(Column(catalogTable['DECJ2000'][idx],
-                                   name='GLEAMDEC'))
+    try:
+        sourcesTable.add_column(Column(catalogTable['DECJ2000'][idx],
+                                       name='GLEAMDEC'))
+    except KeyError:
+        sourcesTable.add_column(Column(catalogTable['DEJ2000'][idx],
+                                       name='GLEAMDEC'))
     sourcesTable.add_column(Column(sep2d.to(u.arcsec),
                                    name='GLEAMSep'))
     sourcesTable.add_column(Column(gleamflux[idx],

@@ -232,7 +232,7 @@ def fluxmatch(image,
         except:
             logger.error('Unable to read catalog %s' % catalog)
             return None        
-    bandfrequencies=numpy.array([int(s.split('_')[-1]) for s in numpy.array(catalogTable.colnames)[numpy.nonzero(numpy.array([('int_flux' in c) and not ('deep' in c) for c in catalogTable.colnames]))[0]]])
+    bandfrequencies=numpy.array([int(s.split('_')[-1]) for s in numpy.array(catalogTable.colnames)[numpy.nonzero(numpy.array([('int_flux' in c) and not ('deep' in c) and not ('wide' in c) for c in catalogTable.colnames]))[0]]])
     
     if len(bandfrequencies)>0:
         # find the indices of the bands just above and below the observation
@@ -245,7 +245,10 @@ def fluxmatch(image,
         weightplus=(frequency/1e6-bandfrequencies[indexminus])/(bandfrequencies[indexplus]-bandfrequencies[indexminus])
         weightminus=1-weightplus
         gleamflux=catalogTable['int_flux_%03d' % bandfrequencies[indexminus]]*weightminus+catalogTable['int_flux_%03d' % bandfrequencies[indexplus]]*weightplus
-        gleamfluxerr=numpy.sqrt((catalogTable['err_fit_flux_%03d' % bandfrequencies[indexminus]]*weightminus)**2+(catalogTable['err_fit_flux_%03d' % bandfrequencies[indexplus]]*weightplus)**2)
+        try:
+            gleamfluxerr=numpy.sqrt((catalogTable['err_fit_flux_%03d' % bandfrequencies[indexminus]]*weightminus)**2+(catalogTable['err_fit_flux_%03d' % bandfrequencies[indexplus]]*weightplus)**2)
+        except KeyError:
+            gleamfluxerr=numpy.sqrt((catalogTable['err_int_flux_%03d' % bandfrequencies[indexminus]]*weightminus)**2+(catalogTable['err_int_flux_%03d' % bandfrequencies[indexplus]]*weightplus)**2)
     else:
         logger.warning('Could not identify GLEAM band fluxes')
         if fluxcolumn is None:

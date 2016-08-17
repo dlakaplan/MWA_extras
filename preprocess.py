@@ -5,11 +5,18 @@ import urllib2, urllib
 import base64
 import time
 import subprocess
+import ssl
+import uuid
+import stat
 from astropy.table import Table,Column
 from astropy.time import Time
 from astropy.coordinates import SkyCoord
 import collections
 
+if sys.version_info[0] >= 3:
+    from http.client import HTTPSConnection
+else:
+    from httplib import HTTPSConnection
 
 import extra_utils
 logger=extra_utils.makelogger('preprocess')
@@ -18,250 +25,297 @@ import mwapy
 from mwapy import metadata
 import find_calibrator
 
-
 ################################################################################
 # from obsdownload.py
-# 2015-02-05
+# 2016-08-17
 ################################################################################
-username = 'ngas'
-password = base64.decodestring('bmdhcw==')
-    
+
+KEY_FILE = os.path.join(os.getenv('HOME'),'obskey.key')
+CERT_FILE = os.path.join(os.getenv('HOME')'obscrt.crt')
+
 ######################################################################
-class PrintStatus():
-    
+class HTTPSClientAuthConnection(HTTPSConnection):
+    """ Class to make a HTTPS connection, with support for full client-based SSL Authentication"""
+
+    def __init__(self, host, key_file, cert_file, timeout = None):
+        HTTPSConnection.__init__(self, host, key_file = key_file, cert_file = cert_file)
+        self.key_file = key_file
+        self.cert_file = cert_file
+        self.ca_file = None
+        self.timeout = timeout
+
+    def connect(self):
+        """ Connect to a host on a given (SSL) port.
+            If ca_file is pointing somewhere, use it to check Server Certificate.
+
+            Redefined/copied and extended from httplib.py:1105 (Python 2.6.x).
+            This is needed to pass cert_reqs=ssl.CERT_REQUIRED as parameter to ssl.wrap_socket(),
+            which forces SSL to check server certificate against our client certificate.
+        """
+        sock = socket.create_connection((self.host, self.port), self.timeout)
+        if self._tunnel_host:
+            self.sock = sock
+            self._tunnel()
+        # If there's no CA File, don't force Server Certificate Check
+        if self.ca_file:
+            self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file, ca_certs=self.ca_file, cert_reqs=ssl.CERT_REQUIRED)
+        else:
+            self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file, cert_reqs=ssl.CERT_NONE)
+
+class FileStatus():
     def __init__(self, numfiles):
         self.status = {}
         self.lock = threading.RLock()
-        self.currentbytes = 0
-        self.totalbytes = 0
-        self.runtime = 0
         self.errors = []
-        self.files = 0
         self.filesComplete = 0
         self.totalfiles = numfiles;
 
-    
-    def fileError(self, err):
+    def file_error(self, err):
         with self.lock:
             self.errors.append(err)
-            logger.error(err)
-        
-    def fileStarting(self, filename):
+            print(err)
+
+    def file_starting(self, filename):
         with self.lock:
-            logger.info('Downloading %s' % (filename))
-            
-    def fileComplete(self, filename):
+            print('%s [INFO] Downloading %s' % (time.strftime('%c'), filename))
+
+    def file_complete(self, filename):
         with self.lock:
             self.filesComplete = self.filesComplete + 1
-            logger.info('%s complete [%d of %d]' % (filename,
-                                                    self.filesComplete,
-                                                    self.totalfiles))
-            
+            print('%s [INFO] %s complete [%d of %d]' % (time.strftime('%c'), filename,
+                                                        self.filesComplete, self.totalfiles))
+
+# def delete_key_file():
+#     try:
+#         os.remove(KEY_FILE)
+#     except:
+#         pass
+#     try:
+#         os.remove(CERT_FILE)
+#     except:
+#         pass
+
+# def create_key_file():
+#     tmpkey = str(uuid.uuid1())
+#     tmpcert = str(uuid.uuid1())
+
+#     with open(tmpkey, 'wb') as out:
+#         out.write(KEY)
+#         out.flush()
+
+#     with open(tmpcert, 'wb') as out:
+#         out.write(CERT)
+#         out.flush()
+
+#     os.rename(tmpkey, KEY_FILE)
+#     os.rename(tmpcert, CERT_FILE)
+#     os.chmod(KEY_FILE, stat.S_IRUSR)
+#     os.chmod(CERT_FILE, stat.S_IRUSR)
+
 ######################################################################
-def queryObs(obs, host, flagonly):
-    #http://fe1.pawsey.ivec.org:7777/QUERY?query=files_like&like=1061316296%&format=json
-    
-    base64string = base64.encodestring('%s:%s' % (username, password)).replace('\n', '')
-    
-    url = 'http://%s/QUERY?' % host
-    data = "query=files_like&like=" + str(obs) + "%&format=json"
-    
+def query_observation(obs, host, flagonly, uvfits, chstart, chcount):
+
+    if not os.path.exists(KEY_FILE):
+        logger.error('Unable to find HTTPS key file %s' % KEY_FILE)
+        return None
+    if not os.path.exists(CERT_FILE):
+        logger.error('Unable to find HTTPS certificate file %s' % CERT_FILE)
+        return None
+
     response = None
     try:
-        # Send HTTP POST request
-        request = urllib2.Request(url + data)
-        request.add_header("Authorization", "Basic %s" % base64string)   
-        
-        response = urllib2.urlopen(request)
-        
-        resultbuffer = ''
-        while True:
-            result = response.read(2048)
-            if result:
-                resultbuffer = resultbuffer + result
-            else:
-                break
+        conn = HTTPSClientAuthConnection(host, key_file = KEY_FILE,
+                                                cert_file = CERT_FILE)
+        conn.request('GET', '/QUERY?query=files_like&like=%s%%&format=json' % obs)
+        response = conn.getresponse()
+        if response.status != 200:
+            raise Exception('HTTP error: %s Reason: %s' \
+                            % (response.status, response.reason))
+
+        length = int(response.getheader('content-length', 0))
+        buffsize = 4096
+        readin = 0
+        resultbuffer = []
+        while readin < length:
+            left = length - readin
+            buff = response.read(buffsize if left >= buffsize else left)
+            if not buff:
+                raise Exception('socket read error')
+            resultbuffer.append(buff)
+            readin += len(buff)
 
         filemap = {}
-        files = json.loads(resultbuffer)['files_like']
-                
+        json_files = json.loads(b''.join(resultbuffer).decode('utf8'))
+        files = json_files.get('files_like', [])
+
         for f in files:
-            # retrieve flag files only
-            if flagonly:
-                if 'flags.zip' in f['col3']:
-                    filemap[f['col3']] = f['col6']
-            # else add all the files: having a map removes diplicates
+            add = False
+
+            filename = f['col3']
+            filesize = f['col6']
+
+            if flagonly or uvfits:
+                if 'flags.zip' in filename and flagonly:
+                    add = True
+
+                if '.uvfits' in filename and uvfits:
+                    add = True
             else:
-                filemap[f['col3']] = f['col6']
-        
+                if chstart != None:
+                    # it must be a valid MWA visibility fits file which contains
+                    # the course channel. If valid extract the course channel
+                    # and check with the range requested.
+                    try:
+                        num = int(filename.split('_')[2].split('gpubox')[1])
+                        if num >= chstart and num < chstart+chcount:
+                            add = True
+                    except Exception as e:
+                        pass
+                        #raise Exception('Invalid course channel filename %s' % filename);
+
+                else:
+                    add = True
+
+            if add is True:
+                filemap[filename] = filesize
+
         return filemap
-    
+
     finally:
         if response:
             response.close()
 
- 
-######################################################################
-def checkFile(filename, size, dir):
-    path = dir + filename
-        
-    # check the file exists
-    if os.path.isfile(path) is True:
-        #check the filesize matches
-        filesize = os.stat(path).st_size
 
+######################################################################
+def check_complete(filename, size, dir):
+    path = dir + filename
+    if os.path.isfile(path) is True:
+        filesize = os.stat(path).st_size
         if filesize == int(size):
             return True
-        
+
     return False
 
+
 ######################################################################
-def worker(url, size, filename, s, out, stat, bufsize):
-    u = None
-    f = None
-    
+def download_worker(url, host, size, filename, sem, out, stat, bufsize):
+
+    resp = None
+
     try:
-        stat.fileStarting(filename)
+        stat.file_starting(filename)
 
-        # open file URL
-        request = urllib2.Request(url)
-        base64string = base64.encodestring('%s:%s' % (username, password)).replace('\n', '')
-        request.add_header("Authorization", "Basic %s" % base64string)   
-        
-        u = urllib2.urlopen(request, timeout=1400)        
-        u.fp.bufsize = bufsize
-        
-        # get file size
-        meta = u.info()
-        file_size = int(meta.getheaders("Content-Length")[0])
-        
-        # open file for writing
-        f = open(out + filename, 'wb')
-        
-        current = 0
-        file_size_dl = 0
-        block_sz = bufsize
-        
-        while file_size_dl < file_size:
-            buffer = u.read(block_sz)
-            if buffer:
-                f.write(buffer)
+        conn = HTTPSClientAuthConnection(host, key_file = KEY_FILE,
+                                        cert_file = CERT_FILE, timeout = 5000)
+        conn.request('GET', '/RETRIEVE?file_id=%s' % filename)
+        response = conn.getresponse()
+        if response.status != 200:
+            raise Exception('HTTP error: %s Reason: %s' \
+                            % (response.status, response.reason))
 
-                current = len(buffer)
-                file_size_dl += current
-                
-            else:
-                if file_size_dl != file_size:
-                    raise Exception("size mismatch %s %s" % str(file_size), str(file_size_dl))
-                
-                break
+        length = int(response.getheader('content-length', 0))
 
-        stat.fileComplete(filename)
-        
-    except urllib2.HTTPError as e:
-        stat.fileError("%s [ERROR] %s %s" % (time.strftime("%c"), filename, str(e.read()) ))
-    
-    except urllib2.URLError as urlerror:
-        if hasattr(urlerror, 'reason'):
-            stat.fileError("%s [ERROR] %s %s" % (time.strftime("%c"), filename, str(urlerror.reason) ))
-        else:
-            stat.fileError("%s [ERROR] %s %s" % (time.strftime("%c"), filename, str(urlerror) ))
-    
+        with open(out + filename, 'wb') as f:
+            readin = 0
+            while readin < length:
+                try:
+                    response.fp._sock.settimeout(120)
+                except:
+                    pass
+                left = length - readin
+                buff = response.read(bufsize if left >= bufsize else left)
+                if not buff:
+                    raise Exception('socket read error')
+                f.write(buff)
+                readin += len(buff)
+
+        stat.file_complete(filename)
+
     except Exception as exp:
-        stat.fileError("%s [ERROR] %s %s" % (time.strftime("%c"), filename, str(exp) ))
-        
+        stat.file_error('%s [ERROR] %s: %s' % (time.strftime('%c'), filename,
+                                                    str(exp)))
     finally:
-        if u != None:
-            u.close()
-            
-        if f != None:
-            f.flush()
-            f.close()
-            
-        s.release()
+        if resp:
+            resp.close()
 
+        sem.release()
 
 
 ######################################################################
 def run_obsdownload(obs,ngashost='fe1.pawsey.ivec.org:7777',
                     numdownload=4):
-    if numdownload <= 0 or numdownload>6:
-        logger.error('Number of downloads must be between 0 and 6')
-        return None
-
     try:
         # get system TCP buffer size
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         bufsize = s.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
         s.close()
 
-        logger.info('Finding observation %s' % obs)
-        
-        fileresult = queryObs(obs, ngashost, False)
-        #fileresult = queryObs(obs, ngashost, True)
+        if numdownload <= 0 or numdownload > 6:
+            logger.error('Number of simultaneous downloads must be > 0 and <= 6')
+            return None
+
+        logger.info('Finding observation %s' % (time.strftime('%c'), options.obs,))
+            
+        fileresult = query_observation(options.obs, options.ngashost,
+                                       options.flagfile, options.uvfits,
+                                       options.chstart, options.chcount)
         
         if len(fileresult) <= 0:
-            logger.error('No files found for observation %s' % obs)
+            logger.error('No file(s) found for observation %s' % (time.strftime('%c'),
+                                                                  options.obs,))
             return None
-        
-        logger.info('Found %s files' % len(fileresult))
-        outputdir=os.path.join(os.curdir,
-                               str(obs),
-                               '')
-    
-        if not os.path.exists(outputdir):
-            os.makedirs(outputdir)
-        
-        stat = PrintStatus(len(fileresult))
-        urls = []
-        
-        for key, value in fileresult.iteritems():
-            url = "http://" + ngashost + "/RETRIEVE?file_id=" + key
-            if checkFile(key, int(value), outputdir) is False:
-                urls.append((url, value, key))
-                # stat.update(url, r[2], 0, 0, 0, 0)    
-            else:
-                stat.fileComplete(key)
 
-        s = threading.BoundedSemaphore(value=numdownload)        
+        logger.info('Found %s files' % (time.strftime('%c'), str(len(fileresult)),))
+
+        outputdir=os.path.join(os.curdir,
+                               str(obs),'')
+        if not os.path.exists(outdir):
+            os.makedirs(outdir)
+
+        urls = []
+        stat = FileStatus(len(fileresult))
+
+        for key, value in fileresult.items():
+            url = 'https://%s/RETRIEVE?file_id=%s' % (options.ngashost, key)
+            if check_complete(key, int(value), outdir) is False:
+                urls.append((url, value, key))
+            else:
+                stat.file_complete(key)
+
+        threads = []
+        sem = threading.BoundedSemaphore(value = numdownload)
         for u in urls:
-            while(1):
-                if s.acquire(blocking=False):
-                    t = threading.Thread(target=worker, args=(u[0],u[1],u[2],s,outputdir,stat,int(bufsize)))
+            while True:
+                if sem.acquire(blocking = False):
+                    t = threading.Thread(target = download_worker,
+                                         args = (u[0], options.ngashost, u[1], u[2],
+                                                 sem, outdir, stat, int(bufsize)))
                     t.setDaemon(True)
                     t.start()
+                    threads.append(t)
                     break
                 else:
                     time.sleep(1)
 
-        while (1):
-            main_thread = threading.currentThread()
-            # if the main thread and print thread are left then we must be done; else wait join
-            if len(threading.enumerate()) == 1:
-                break;
-            
-            for t in threading.enumerate():
-                # if t is main_thread or t is status_thread:
-                if t is main_thread:
-                    continue
-                
+        # wait for all the threads to finish
+        while len(threads) > 0:
+            for t in list(threads):
                 t.join(1)
-                if t.isAlive():
-                    continue
+                if not t.isAlive():
+                    threads.remove(t)
 
-        logger.info('File Transfer Complete')
-        
+        logger.info('File Transfer Complete.' % (time.strftime('%c')))
+
         # check if we have errors
-        if len(stat.errors) > 0:
-            logger.warning('File Transfer Error Summary:')
-            for i in stat.errors:
-                logger.warning(i)
-                
-            #raise Exception()
+        if stat.errors:
+            logger.warning('File Transfer Error Summary:' % (time.strftime('%c')))
+            for errs in stat.errors:
+                logger.warning(errs)
+                raise Exception()
         else:
-            logger.info('File Transfer Success')
-
+            logger.info('File Transfer Success.' % (time.strftime('%c')))
         return fileresult
+
     except KeyboardInterrupt as k:
         logger.error('Interrupted; terminating download')
         return None
@@ -269,6 +323,259 @@ def run_obsdownload(obs,ngashost='fe1.pawsey.ivec.org:7777',
     except Exception as e:
         logger.error(e)
         return None
+
+
+
+################################################################################
+# from obsdownload.py
+# 2015-02-05
+################################################################################
+# username = 'ngas'
+# password = base64.decodestring('bmdhcw==')
+    
+# ######################################################################
+# class PrintStatus():
+    
+#     def __init__(self, numfiles):
+#         self.status = {}
+#         self.lock = threading.RLock()
+#         self.currentbytes = 0
+#         self.totalbytes = 0
+#         self.runtime = 0
+#         self.errors = []
+#         self.files = 0
+#         self.filesComplete = 0
+#         self.totalfiles = numfiles;
+
+    
+#     def fileError(self, err):
+#         with self.lock:
+#             self.errors.append(err)
+#             logger.error(err)
+        
+#     def fileStarting(self, filename):
+#         with self.lock:
+#             logger.info('Downloading %s' % (filename))
+            
+#     def fileComplete(self, filename):
+#         with self.lock:
+#             self.filesComplete = self.filesComplete + 1
+#             logger.info('%s complete [%d of %d]' % (filename,
+#                                                     self.filesComplete,
+#                                                     self.totalfiles))
+            
+# ######################################################################
+# def queryObs(obs, host, flagonly):
+#     #http://fe1.pawsey.ivec.org:7777/QUERY?query=files_like&like=1061316296%&format=json
+    
+#     base64string = base64.encodestring('%s:%s' % (username, password)).replace('\n', '')
+    
+#     url = 'http://%s/QUERY?' % host
+#     data = "query=files_like&like=" + str(obs) + "%&format=json"
+    
+#     response = None
+#     try:
+#         # Send HTTP POST request
+#         request = urllib2.Request(url + data)
+#         request.add_header("Authorization", "Basic %s" % base64string)   
+        
+#         response = urllib2.urlopen(request)
+        
+#         resultbuffer = ''
+#         while True:
+#             result = response.read(2048)
+#             if result:
+#                 resultbuffer = resultbuffer + result
+#             else:
+#                 break
+
+#         filemap = {}
+#         files = json.loads(resultbuffer)['files_like']
+                
+#         for f in files:
+#             # retrieve flag files only
+#             if flagonly:
+#                 if 'flags.zip' in f['col3']:
+#                     filemap[f['col3']] = f['col6']
+#             # else add all the files: having a map removes diplicates
+#             else:
+#                 filemap[f['col3']] = f['col6']
+        
+#         return filemap
+    
+#     finally:
+#         if response:
+#             response.close()
+
+ 
+# ######################################################################
+# def checkFile(filename, size, dir):
+#     path = dir + filename
+        
+#     # check the file exists
+#     if os.path.isfile(path) is True:
+#         #check the filesize matches
+#         filesize = os.stat(path).st_size
+
+#         if filesize == int(size):
+#             return True
+        
+#     return False
+
+# ######################################################################
+# def worker(url, size, filename, s, out, stat, bufsize):
+#     u = None
+#     f = None
+    
+#     try:
+#         stat.fileStarting(filename)
+
+#         # open file URL
+#         request = urllib2.Request(url)
+#         base64string = base64.encodestring('%s:%s' % (username, password)).replace('\n', '')
+#         request.add_header("Authorization", "Basic %s" % base64string)   
+        
+#         u = urllib2.urlopen(request, timeout=1400)        
+#         u.fp.bufsize = bufsize
+        
+#         # get file size
+#         meta = u.info()
+#         file_size = int(meta.getheaders("Content-Length")[0])
+        
+#         # open file for writing
+#         f = open(out + filename, 'wb')
+        
+#         current = 0
+#         file_size_dl = 0
+#         block_sz = bufsize
+        
+#         while file_size_dl < file_size:
+#             buffer = u.read(block_sz)
+#             if buffer:
+#                 f.write(buffer)
+
+#                 current = len(buffer)
+#                 file_size_dl += current
+                
+#             else:
+#                 if file_size_dl != file_size:
+#                     raise Exception("size mismatch %s %s" % str(file_size), str(file_size_dl))
+                
+#                 break
+
+#         stat.fileComplete(filename)
+        
+#     except urllib2.HTTPError as e:
+#         stat.fileError("%s [ERROR] %s %s" % (time.strftime("%c"), filename, str(e.read()) ))
+    
+#     except urllib2.URLError as urlerror:
+#         if hasattr(urlerror, 'reason'):
+#             stat.fileError("%s [ERROR] %s %s" % (time.strftime("%c"), filename, str(urlerror.reason) ))
+#         else:
+#             stat.fileError("%s [ERROR] %s %s" % (time.strftime("%c"), filename, str(urlerror) ))
+    
+#     except Exception as exp:
+#         stat.fileError("%s [ERROR] %s %s" % (time.strftime("%c"), filename, str(exp) ))
+        
+#     finally:
+#         if u != None:
+#             u.close()
+            
+#         if f != None:
+#             f.flush()
+#             f.close()
+            
+#         s.release()
+
+
+
+# ######################################################################
+# def old.run_obsdownload(obs,ngashost='fe1.pawsey.ivec.org:7777',
+#                     numdownload=4):
+#     if numdownload <= 0 or numdownload>6:
+#         logger.error('Number of downloads must be between 0 and 6')
+#         return None
+
+#     try:
+#         # get system TCP buffer size
+#         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+#         bufsize = s.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+#         s.close()
+
+#         logger.info('Finding observation %s' % obs)
+        
+#         fileresult = queryObs(obs, ngashost, False)
+#         #fileresult = queryObs(obs, ngashost, True)
+        
+#         if len(fileresult) <= 0:
+#             logger.error('No files found for observation %s' % obs)
+#             return None
+        
+#         logger.info('Found %s files' % len(fileresult))
+#         outputdir=os.path.join(os.curdir,
+#                                str(obs),
+#                                '')
+    
+#         if not os.path.exists(outputdir):
+#             os.makedirs(outputdir)
+        
+#         stat = PrintStatus(len(fileresult))
+#         urls = []
+        
+#         for key, value in fileresult.iteritems():
+#             url = "http://" + ngashost + "/RETRIEVE?file_id=" + key
+#             if checkFile(key, int(value), outputdir) is False:
+#                 urls.append((url, value, key))
+#                 # stat.update(url, r[2], 0, 0, 0, 0)    
+#             else:
+#                 stat.fileComplete(key)
+
+#         s = threading.BoundedSemaphore(value=numdownload)        
+#         for u in urls:
+#             while(1):
+#                 if s.acquire(blocking=False):
+#                     t = threading.Thread(target=worker, args=(u[0],u[1],u[2],s,outputdir,stat,int(bufsize)))
+#                     t.setDaemon(True)
+#                     t.start()
+#                     break
+#                 else:
+#                     time.sleep(1)
+
+#         while (1):
+#             main_thread = threading.currentThread()
+#             # if the main thread and print thread are left then we must be done; else wait join
+#             if len(threading.enumerate()) == 1:
+#                 break;
+            
+#             for t in threading.enumerate():
+#                 # if t is main_thread or t is status_thread:
+#                 if t is main_thread:
+#                     continue
+                
+#                 t.join(1)
+#                 if t.isAlive():
+#                     continue
+
+#         logger.info('File Transfer Complete')
+        
+#         # check if we have errors
+#         if len(stat.errors) > 0:
+#             logger.warning('File Transfer Error Summary:')
+#             for i in stat.errors:
+#                 logger.warning(i)
+                
+#             #raise Exception()
+#         else:
+#             logger.info('File Transfer Success')
+
+#         return fileresult
+#     except KeyboardInterrupt as k:
+#         logger.error('Interrupted; terminating download')
+#         return None
+    
+#     except Exception as e:
+#         logger.error(e)
+#         return None
 
 ##################################################
 def tokenize(input):
@@ -406,9 +713,9 @@ class Observation():
                                                                                                     self.basedir))
             return None
         self.downloadedfiles=run_obsdownload(self.obsid, numdownload=numdownload)
-        downloadedfiles2=run_obsdownload(self.obsid, numdownload=numdownload)
-        for k in downloadedfiles2.keys():
-            self.downloadedfiles[k]=downloadedfiles2[k]
+        #downloadedfiles2=run_obsdownload(self.obsid, numdownload=numdownload)
+        #for k in downloadedfiles2.keys():
+        #    self.downloadedfiles[k]=downloadedfiles2[k]
         return self.downloadedfiles
     ##############################
     def makemetafits(self):        

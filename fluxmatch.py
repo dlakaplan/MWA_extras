@@ -87,7 +87,7 @@ def find_beam(image):
     logger.info('Creating primary beam for %s' % image)
     out=make_beam.make_beam(image, ext=0,
                             delays=delays,
-                            analytic_model=True,
+                            model='analytic',
                             jones=False,
                             precess=False)
     if f[0].header['CRVAL4']==-5:

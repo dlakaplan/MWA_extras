@@ -14,6 +14,13 @@ To debug:
 """
 
 import logging,logging.handlers,datetime,math,sys,socket,os,shutil,io
+try:
+    import matplotlib
+    matplotlib.use('PDF')
+    from matplotlib import pyplot as plt
+    _matplotlib=True
+except:
+    _matplotlib=False
 from optparse import OptionParser,OptionGroup
 import time,tempfile
 import subprocess,fcntl
@@ -21,14 +28,18 @@ from astropy.table import Table,Column
 import collections,glob,numpy
 from astropy.io import fits
 from astropy.coordinates import SkyCoord
-from astropy import units as u
-    
+import astropy
+from astropy import constants as c, units as u
+from astropy.wcs import WCS
+
 import extra_utils
+
 logger=extra_utils.makelogger('calibrate_image')
     
 
 import mwapy
 from mwapy import metadata
+from mwapy.pb import make_beam
 
 try:
     import drivecasa
@@ -164,9 +175,9 @@ def getstatus(p, output=None, error=None):
                 pass
     return poll
 ##################################################
-def stat_measure(image, fraction=0.5):
+def stat_measure(image, fraction=0.5, nonan=True):
     """
-    median, rms = stat_measure(image, fraction=0.5)
+    median, rms = stat_measure(image, fraction=0.5, nonan=True)
     uses the central fraction of the image to compute
     the median and rms (using inner-quartile range)
     """
@@ -195,6 +206,8 @@ def stat_measure(image, fraction=0.5):
     xstart=(nx/2)-xtouse/2
     xstop=(nx/2)+xtouse/2
     d=(data[:,:,ystart:ystop,xstart:xstop]).flatten()
+    if nonan:
+        d=d[~numpy.isnan(d)]
     q1,m,q2=numpy.percentile(d, [25,50,75])
     return m,(q2-q1)/1.35
 
@@ -494,7 +507,7 @@ def calibrate_casa(obsid, directory=None, minuv=60):
     try:
         casa = drivecasa.Casapy(casa_dir=casapy,
                                 working_dir=basedir,
-                                timeout=3600)
+                                timeout=7200)
     except Exception, e:
         logger.error('Unable to instantiate casa:\n%s' % e)
         return None
@@ -595,7 +608,7 @@ def applycal_casa(obsid, calfile):
     try:
         casa = drivecasa.Casapy(casa_dir=casapy,
                                 working_dir=basedir,
-                                 timeout=3600)
+                                 timeout=7200)
 
     except Exception, e:
         logger.error('Unable to instantiate casa:\n%s' % e)
@@ -1207,7 +1220,7 @@ class Observation(metadata.MWA_Observation):
               clean_threshold=0,
               fullpolarization=True,
               smallinversion=True,
-              cleanborder=1,
+              cleanborder=5,
               fitbeam=True,
               wsclean_arguments='',
               subbands=1,
@@ -1226,7 +1239,7 @@ class Observation(metadata.MWA_Observation):
               clean_threshold=0,
               fullpolarization=True,
               smallinversion=True,
-              cleanborder=1,
+              cleanborder=5,
               fitbeam=True,
               wsclean_arguments='',
               subbands=1,
@@ -2064,7 +2077,413 @@ class Observation(metadata.MWA_Observation):
 
             
         return self.corrfiles
+
             
+######################################################################
+# from fluxmatch.py
+######################################################################
+def get_rms_background(imagename, cores=16):
+    outbase=os.path.splitext(imagename)[0]
+    rmsimage=outbase + '_rms.fits'
+    bgimage=outbase + '_bkg.fits'
+    if not (os.path.exists(rmsimage) and os.path.exists(bgimage)):
+        BANE.filter_image(imagename,
+                          outbase,
+                          mask=False, 
+                          cores=cores)
+    else:
+        logger.info('Using existing background and rms images %s, %s' % (bgimage,rmsimage))
+    return rmsimage, bgimage
+    
+######################################################################
+def find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True,
+                          region=None, cores=16):
+    """
+    sources,rmsimage,bgimage=find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True, region=None, cores=16)
+    runs aegean.find_sources_in_image
+    but first runs BANE to get the BG/rms estimates
+    if region is supplied (.mim format) only sources inside that will be identified
+    """
+    if usebane:
+        rmsimage, bgimage=get_rms_background(imagename, cores=cores)
+    else:
+        rmsimage,bgimage=None,None
+
+    sources=aegean.find_sources_in_image(imagename,
+                                         max_summits=max_summits,
+                                         csigma=csigma,
+                                         rmsin=rmsimage,
+                                         bkgin=bgimage,
+                                         mask=region,
+                                         cores=cores)
+    return sources,rmsimage,bgimage
+
+######################################################################
+def aegean2table(sources):
+    """
+    sourcesTable=aegean2table(sources)
+    return astropy table corresponding to aegean source list
+    """
+    ra=Column([s.ra for s in sources],name='RA')
+    dec=Column([s.dec for s in sources],name='Dec')
+    peakflux=Column([s.peak_flux for s in sources],name='PeakFlux')
+    peakfluxerr=Column([s.err_peak_flux for s in sources],name='PeakFluxErr')
+    intflux=Column([s.int_flux for s in sources],name='IntFlux')
+    intfluxerr=Column([s.err_int_flux for s in sources],name='IntFluxErr')
+    rms=Column([s.local_rms for s in sources],name='RMS')
+
+    sourcesTable=Table([ra,dec,peakflux,peakfluxerr,intflux,intfluxerr,rms])
+    return sourcesTable
+######################################################################
+def find_beam(image):
+    f=fits.open(image)
+    if 'BEAM' in f[0].header.keys():
+        if os.path.exists(f[0].header['BEAM']):
+            logger.info('Found existing primary beam in header: %s' % f[0].header['BEAM'])
+            return f[0].header['BEAM']
+    if not 'DELAYS' in f[0].header.keys():
+        return None
+    delays=[int(x) for x in f[0].header['DELAYS'].split(',')]
+    out=make_beam.make_beam(image, ext=0,
+                            delays=delays,
+                            analytic_model=True,
+                            jones=False,
+                            precess=False)
+    if f[0].header['CRVAL4']==-5:
+        # XX
+        return out[0]
+    elif f[0].header['CRVAL4']==-6:
+        # YY
+        return out[1]
+    elif f[0].header['CRVAL4']==1:
+        # I
+        fXX=fits.open(out[0])
+        fYY=fits.open(out[1])
+        fXX[0].data=0.5*(fXX[0].data+fYY[0].data)
+        fXX[0].header['CRVAL4']=1
+        out=out[0].replace('_beamXX','_beamI')
+        if os.path.exists(out):
+            os.remove(out)
+        fXX.writeto(out)
+        return out            
+
+######################################################################
+def fluxmatch(image,
+              catalog='GLEAMIDR3.fits',
+              nsigma=10,
+              rmsfactor=3,
+              matchradius=120,
+              rejectsigma=3,
+              maxdistance=20,
+              minbeam=0.5,
+              psfextent=1.1,
+              refineposition=False,
+              maxscale=10,
+              update=False,
+              plot=True,
+              cores=1):
+    """
+    catalog='GLEAMIDR3.fits',
+    signal-to-noise for source finding
+    nsigma=10,
+    ratio of local rms to minimum image RMS that is OK
+    rmsfactor=3,
+    distance between catalog source and source in image (arcsec)
+    matchradius=120,
+    rejection sigma for flux ratio outliers
+    rejectsigma=3,
+    distance from the image center that is OK (deg)
+    maxdistance=20,
+    minimum beam power compared to max
+    minbeam=0.5,
+    area of source/area of psf threshold
+    psfextent=1.1,
+    """
+
+    if not isinstance(matchradius,astropy.units.quantity.Quantity):
+        matchradius=matchradius*u.arcsec
+    if not isinstance(maxdistance,astropy.units.quantity.Quantity):
+        maxdistance=maxdistance*u.deg        
+
+    if not _matplotlib:
+        logger.warning('matplotlib is not enabled; unable to plot')
+
+    if not os.path.exists(image):
+        logger.error('Cannot find input image %s' % image)
+        return None
+    if not os.path.exists(catalog):
+        logger.error('Cannot find GLEAM catalog %s' % catalog)
+        return None
+    beam=find_beam(image)
+    if beam is None:
+        logger.warning('Did not generate primary beam: will ignore')
+        minbeam=None
+    if not os.path.exists(beam):
+        logger.warning('Cannot find primary beam %s: will ignore' % beam)
+        minbeam=None                
+        beam=None
+    outbase=os.path.splitext(image)[0]           
+    sources, rmsimage, bgimage=find_sources_in_image(image,
+                                                     csigma=nsigma,
+                                                     cores=cores)
+    logger.info('Found %d sources above %d sigma in %s' % (len(sources),
+                                                           nsigma,
+                                                           image))
+    logger.info('Wrote %s and %s' % (rmsimage, bgimage))
+    # convert to astropy table
+    sourcesTable=aegean2table(sources)
+    
+    fimage=fits.open(image)
+    frequency=fimage[0].header['CRVAL3']
+    w=WCS(fimage[0].header,naxis=2)
+    frmsimage=fits.open(rmsimage)
+    minrms=frmsimage[0].data.min()
+    logger.info('Minimum RMS in image is %.1f mJy' % (minrms*1e3))
+
+    if beam is not None:
+        fbeam=fits.open(beam)    
+
+    x,y=w.wcs_world2pix(sourcesTable['RA'],sourcesTable['Dec'],0)
+    sourcesTable.add_column(Column(x,name='X'))
+    sourcesTable.add_column(Column(y,name='Y'))
+    pointingcenter=SkyCoord(fimage[0].header['RA'],fimage[0].header['DEC'],
+                            unit=('deg','deg'))
+    coords=SkyCoord(sourcesTable['RA'],sourcesTable['Dec'],unit=(u.deg,u.deg))
+    sourcesTable.add_column(Column(coords.separation(pointingcenter).to(u.deg),
+                                   name='SOURCEDIST'))
+    if beam is not None:
+        sourcesTable.add_column(Column(fbeam[0].data[0,0,numpy.int16(y),
+                                                     numpy.int16(x)],
+                                       name='BEAM'))
+    else:
+        sourcesTable.add_column(Column(0*x,
+                                       name='BEAM'))
+        
+    fcatalog=fits.open(catalog)
+    catalogTable=Table(fcatalog[1].data)
+    bandfrequencies=numpy.array([int(s.split('_')[-1]) for s in numpy.array(catalogTable.colnames)[numpy.nonzero(numpy.array([('int_flux' in c) and not ('deep' in c) for c in catalogTable.colnames]))[0]]])
+
+    # find the indices of the bands just above and below the observation
+    # linearly weight the fluxes just above and below to match
+    # the observation frequency
+    indexplus=(bandfrequencies>=frequency/1e6).nonzero()[0].min()
+    indexminus=(bandfrequencies<frequency/1e6).nonzero()[0].max()
+    logger.info('Observation frequency of %.1f MHz: interpolating between %d MHz and %d MHz' % (frequency/1e6,bandfrequencies[indexminus],bandfrequencies[indexplus]))
+    
+    weightplus=(frequency/1e6-bandfrequencies[indexminus])/(bandfrequencies[indexplus]-bandfrequencies[indexminus])
+    weightminus=1-weightplus
+    gleamflux=catalogTable['int_flux_%03d' % bandfrequencies[indexminus]]*weightminus+catalogTable['int_flux_%03d' % bandfrequencies[indexplus]]*weightplus
+    gleamfluxerr=numpy.sqrt((catalogTable['err_fit_flux_%03d' % bandfrequencies[indexminus]]*weightminus)**2+(catalogTable['err_fit_flux_%03d' % bandfrequencies[indexplus]]*weightplus)**2)
+
+    catalogcoords=SkyCoord(catalogTable['RAJ2000'],
+                           catalogTable['DECJ2000'],unit=(u.deg,u.deg))
+    # match the catalog to the data
+    idx,sep2d,sep3d=coords.match_to_catalog_sky(catalogcoords)
+    # add the matched columns to the soure table
+    sourcesTable.add_column(Column(catalogTable['Name'][idx],
+                                   name='Name'))
+    sourcesTable.add_column(Column(catalogTable['RAJ2000'][idx],
+                                   name='GLEAMRA'))
+    sourcesTable.add_column(Column(catalogTable['DECJ2000'][idx],
+                                   name='GLEAMDEC'))
+    sourcesTable.add_column(Column(sep2d.to(u.arcsec),
+                                   name='GLEAMSep'))
+    sourcesTable.add_column(Column(gleamflux[idx],
+                                   name='GLEAMFlux'))
+    sourcesTable.add_column(Column(gleamfluxerr[idx],
+                                   name='GLEAMFluxErr'))
+    sourcesTable.add_column(Column(catalogTable['psf_a_%03d' % bandfrequencies[indexplus]][idx] * catalogTable['psf_b_%03d' % bandfrequencies[indexplus]][idx],
+                                   name='PSFAREA'))
+    sourcesTable.add_column(Column(catalogTable['a_%03d' % bandfrequencies[indexplus]][idx] * catalogTable['b_%03d' % bandfrequencies[indexplus]][idx],
+                                   name='SOURCEAREA'))
+
+    dRA=(sourcesTable['RA']-sourcesTable['GLEAMRA'])
+    dDEC=(sourcesTable['Dec']-sourcesTable['GLEAMDEC'])
+    iterations=1
+    if refineposition:
+        iterations=2
+        
+
+    for iter in xrange(iterations):
+        # determine the good matches
+        # first criterion is separation
+        good=(sourcesTable['GLEAMSep']<matchradius)
+        logger.info('%04d/%04d sources are within %.1f arcsec' % (good.sum(),
+                                                                  len(good),
+                                                                  matchradius.to(u.arcsec).value))
+        # only point sources
+        if psfextent is not None and psfextent>0:
+            good=good & (sourcesTable['SOURCEAREA']<=psfextent*sourcesTable['PSFAREA'])
+            logger.info('%04d/%04d sources also have source a*b < %.1f * psf a*b' % (good.sum(),
+                                                                                     len(good),
+                                                                                     psfextent))
+        # cut on the local rms compared to the minimum in the image
+        if rmsfactor is not None and rmsfactor>0:
+            good=good & (sourcesTable['RMS']<=rmsfactor*minrms)
+            logger.info('%04d/%04d sources also have RMS < %.1f mJy' % (good.sum(),
+                                                                        len(good),
+                                                                        rmsfactor*minrms*1e3))
+        # distance from pointing center
+        if maxdistance is not None and maxdistance>0:
+            good=good & (sourcesTable['SOURCEDIST'] < maxdistance)
+            logger.info('%04d/%04d sources also are within %.1f deg of pointing center' % (good.sum(),
+                                                                                           len(good),
+                                                                                           maxdistance.to(u.deg).value))
+        # primary beam power
+        if minbeam is not None and minbeam>0:
+            good=good & (sourcesTable['BEAM']>minbeam*fbeam[0].data.max())
+            logger.info('%04d/%04d sources also are at primary beam power > %.2f' % (good.sum(),len(good),minbeam))
+
+        # require that all sources are > 5 sigma detections
+        # and that flux uncertainties are > 0
+        good=good & (sourcesTable['IntFluxErr']<0.2*sourcesTable['IntFlux']) & (sourcesTable['IntFluxErr']>0) & (sourcesTable['GLEAMFluxErr']>0) & (sourcesTable['GLEAMFluxErr']<0.2*sourcesTable['GLEAMFlux'])
+        logger.info('%04d/%04d sources match all cuts' % (good.sum(),
+                                                          len(good)))
+
+        fitres=numpy.polyfit(sourcesTable['GLEAMFlux'][good],
+                             sourcesTable['IntFlux'][good],
+                             deg=1,
+                             w=1/sourcesTable['IntFluxErr'][good]**2)
+        ratio=sourcesTable['IntFlux']/sourcesTable['GLEAMFlux']
+        ratioerr=numpy.sqrt((sourcesTable['IntFluxErr']/sourcesTable['GLEAMFlux'])**2+(sourcesTable['IntFlux']*sourcesTable['GLEAMFluxErr']/sourcesTable['GLEAMFlux']**2)**2)
+        if rejectsigma is not None:
+            # do a bit of sigma clipping just in case
+            good=(good) & (numpy.abs(ratio-numpy.median(ratio[good]))<=ratioerr*rejectsigma)
+        fittedratio=(ratio[good]/ratioerr[good]**2).sum()/(1/ratioerr[good]**2).sum()
+        fittedratioerr=numpy.sqrt(1/(1/ratioerr[good]**2).sum())
+        chisq=(((ratio[good]-fittedratio)/ratioerr[good])**2).sum()
+        ndof=good.sum()-1
+        logger.info('Found ratio of %s / %s = %.3f +/- %.3f' % (image,
+                                                                catalog,
+                                                                fittedratio,
+                                                                fittedratioerr))
+        if refineposition and iter==0:
+            sourcesTable['RA']-=dRA[good].mean()
+            sourcesTable['Dec']-=dDEC[good].mean()
+            logger.info('Applied shift of (%.1f sec, %.1f arcsec)' % (dRA[good].mean()*3600,
+                                                                      dDEC[good].mean()*3600))
+            coords=SkyCoord(sourcesTable['RA'],sourcesTable['Dec'],unit=(u.deg,u.deg))
+            idx,sep2d,sep3d=coords.match_to_catalog_sky(catalogcoords)
+            sourcesTable['GLEAMSep']=sep2d.to(u.arcsec)
+
+    sourcesTable.add_column(Column(good,name='GOOD'))
+    sourcesTable.meta['ratio']=fittedratio
+    sourcesTable.meta['ratio_err']=fittedratioerr
+    sourcesTable.meta['chisq']=chisq
+    sourcesTable.meta['ndof']=ndof
+    sourcesTable.meta['slope']=fitres[0]
+    sourcesTable.meta['intercept']=fitres[1]
+    sourcesTable.meta['rashift']=0
+    sourcesTable.meta['decshift']=0
+    if refineposition:
+        sourcesTable.meta['rashift']=dRA[good].mean()*3600
+        sourcesTable.meta['decshift']=dDEC[good].mean()*3600
+    if os.path.exists(outbase + '_fluxmatch.hdf5'):
+        os.remove(outbase + '_fluxmatch.hdf5')
+    sourcesTable.write(outbase + '_fluxmatch.hdf5',path='data')
+    logger.info('Wrote %s_fluxmatch.hdf5' % outbase)
+
+
+    if update:
+        if fittedratio > maxscale or fittedratio < 1.0/maxscale:
+            logger.warning('Ratio exceeds reasonable limits; skipping...')
+        else:
+            fimage=fits.open(image,'update')
+            fimage[0].data/=fittedratio
+            fimage[0].header['FLUXSCAL']=(fittedratio,'Flux scaling relative to catalog')
+            fimage[0].header['FLUX_ERR']=(fittedratioerr,'Flux scaling uncertainty relative to catalog')
+            fimage[0].header['FLUXCAT']=(catalog,'Flux scaling catalog')
+            fimage[0].header['NFLUXSRC']=(good.sum(),'Number of sources used for flux scaling')
+            fimage[0].header['FLUXCHI2']=(chisq,'Flux scaling chi-squared')
+            fimage[0].header['FLUXSLOP']=(fitres[0],'Flux scaling slope')
+            if refineposition:
+                fimage[0].header['RASHIFT']=(dRA[good].mean()*3600,'[s] RA Shift for catalog match')
+                fimage[0].header['DECSHIFT']=(dDEC[good].mean()*3600,'[arcsec] DEC Shift for catalog match')
+                fimage[0].header['CRVAL1']-=dRA[good].mean()
+                fimage[0].header['CRVAL2']-=dDEC[good].mean()
+            if 'IMAGERMS' in fimage[0].header.keys():
+                fimage[0].header['IMAGERMS']/=fittedratio
+            fimage.flush()
+            logger.info('Scaled %s by %.3f' % (image,fittedratio))
+        
+
+    if plot:
+
+        plt.clf()
+        xx=numpy.logspace(-2,10)
+        plt.loglog(xx,xx*fittedratio,'r')
+        plt.loglog(xx,numpy.polyval(fitres,xx),
+                 'r--')
+        plt.errorbar(sourcesTable[good]['GLEAMFlux'],
+                     sourcesTable[good]['IntFlux'],
+                     xerr=sourcesTable[good]['GLEAMFluxErr'],
+                     yerr=sourcesTable[good]['IntFluxErr'],
+                     fmt='b.')
+        #plt.gca().set_xscale('log')
+        #plt.gca().set_yscale('log')
+        plt.axis([0.1,2,0.1,2])
+        plt.xlabel('Flux Density in %s (Jy)' % catalog,fontsize=16)
+        plt.ylabel('Flux Density in %s (Jy)' % image,fontsize=16)
+        plt.gca().tick_params(labelsize=16)
+        plt.savefig('%s_fluxflux.pdf' % outbase)
+        logger.info('Wrote %s_fluxflux.pdf' % outbase)
+
+        plt.clf()
+        plt.hist(ratio[good],30)
+        plt.xlabel('Flux Density in %s / Flux Density in %s' % (image,catalog),
+                   fontsize=16)
+        plt.ylabel('Number of Sources',fontsize=16)
+        plt.plot(fittedratio*numpy.array([1,1]),
+                 plt.gca().get_ylim(),'r-')
+        plt.gca().tick_params(labelsize=16)
+        plt.savefig('%s_hist.pdf' % outbase)
+        logger.info('Wrote %s_hist.pdf' % outbase)
+        
+        plt.clf()
+        plt.plot(x,y,'k.')
+        h=plt.scatter(x[good],y[good],s=60,
+                      c=ratio[good],
+                      norm=matplotlib.colors.LogNorm(vmin=0.5,vmax=2),
+                      cmap=plt.cm.BrBG)
+        plt.xlabel('X',fontsize=16)
+        plt.ylabel('Y',fontsize=16)
+        cbar = plt.gcf().colorbar(h,ticks=[0.5,1,2])
+        plt.gca().tick_params(labelsize=16)
+        plt.savefig('%s_scatter.pdf' % outbase)
+        logger.info('Wrote %s_scatter.pdf' % outbase)    
+
+        plt.clf()
+        plt.plot((sourcesTable['RA'][good]-sourcesTable['GLEAMRA'][good])*3600,
+                 (sourcesTable['Dec'][good]-sourcesTable['GLEAMDEC'][good])*3600,
+                 'ro')
+        plt.plot(plt.gca().get_xlim(),[0,0],'k--')
+        plt.plot([0,0],plt.gca().get_ylim(),'k--')
+        plt.xlabel('$\\alpha$(%s)-$\\alpha$(%s)' % (image,catalog),fontsize=16)
+        plt.ylabel('$\\delta$(%s)-$\\delta$(%s)' % (image,catalog),fontsize=16)
+        plt.gca().tick_params(labelsize=16)
+        plt.savefig('%s_position.pdf' % outbase)
+        logger.info('Wrote %s_position.pdf' % outbase)    
+
+        plt.clf()
+        xx=numpy.linspace(0,300,50)
+        plt.hist(sourcesTable['GLEAMSep'].to(u.arcsec).value[~good],
+                 xx,color='b',alpha=0.5)
+        plt.hist(sourcesTable['GLEAMSep'].to(u.arcsec).value[good],
+                 xx,color='r',alpha=0.5)
+        plt.plot(matchradius.to(u.arcsec).value*numpy.array([1,1]),
+                 plt.gca().get_ylim(),
+                 'k--')
+        plt.xlabel('Separation %s vs. %s (arcsec)' % (image,catalog),
+                   fontsize=16)
+        plt.ylabel('Number of sources',fontsize=16)
+        plt.gca().tick_params(labelsize=16)
+        plt.savefig('%s_separation.pdf' % outbase)
+        logger.info('Wrote %s_separation.pdf' % outbase)    
+
+        
+    return fittedratio, fittedratioerr, chisq, ndof, fitres[0], fitres[1], sourcesTable.meta['rashift'], sourcesTable.meta['decshift']
+
+                
 
 ##################################################                              
 def main():
@@ -2101,11 +2520,20 @@ def main():
     control_parser.add_option('--selfcal',dest='selfcal',default=False,
                               action='store_true',
                               help='Run selfcal?')    
+    imaging_parser.add_option('--selfcalthreshold',dest='selfcal_clean_threshold',default=0.01,
+                              type='float',
+                              help='Clean threshold during initial (pre-selfcal) clean (Jy) [default=%default]')
+    #control_parser.add_option('--nofluxscale',dest='fluxscale',default=True,
+    #                          action='store_false',
+    #                          help='Do not scale the fluxes after selfcal using source finding?')    
+    #control_parser.add_option('--fluxscaleregion',dest='fluxscaleregion',default=None,type='str',
+    #                          help='Region for flux scaling. Default is HPBW.  Can also be radius [deg] around pointing center or MIMAS region file')
     control_parser.add_option('--nofluxscale',dest='fluxscale',default=True,
                               action='store_false',
-                              help='Do not scale the fluxes after selfcal using source finding?')    
-    control_parser.add_option('--fluxscaleregion',dest='fluxscaleregion',default=None,type='str',
-                              help='Region for flux scaling. Default is HPBW.  Can also be radius [deg] around pointing center or MIMAS region file')
+                              help='Do not scale the fluxes with catalog matching')
+    control_parser.add_option('--catalog',dest='catalog', default='/work/MWA/GLEAMIDR3.fits',
+                              help='GLEAM catalog for flux scaling [default=%default]')
+    
     control_parser.add_option('--autosize',default=1,type='float',
                               help='Maximum possible size increase factor to include a bright source [default=%default]')
     imaging_parser.add_option('--size','--imagesize',dest='imagesize',default=2048,type='int',
@@ -2141,7 +2569,7 @@ def main():
     imaging_parser.add_option('--nosmallinversion',dest='smallinversion',default=True,
                               action='store_false',
                               help='Do not perform small inversion (sacrifice aliasing for speed)?')
-    imaging_parser.add_option('--cleanborder',dest='cleanborder',default=1,
+    imaging_parser.add_option('--cleanborder',dest='cleanborder',default=5,
                               type='int',
                               help='Clean border in percent of total image size [default=%default]')
     imaging_parser.add_option('--nofitbeam',dest='fitbeam',default=True,
@@ -2315,6 +2743,12 @@ def main():
                                         ('subband_bandwidth','f4'),
                                         ('subexposures','i4'),
                                         ('exposure_time','f4'),
+                                        ('fluxscale','f4'),
+                                        ('fluxscale_nsources','f4'),
+                                        ('fluxscale_chisq','f4'),
+                                        ('rashift_sec','f4'),
+                                        ('decshift_arcsec','f4'),
+                                        ('fluxscale_catalog','a200'),
                                         ('wsclean_arguments','a60'),
                                         ('wsclean_command','a200'),
                                         #('rawimages','a30',(6,)),               
@@ -2382,27 +2816,30 @@ def main():
                     logger.warning('Source %s is %.1f deg from field center of %d but outside imaged area; recommend increasing imaged area' % (source,distance.value,observations[obsid].observation_number))
                     increasesize=True
 
-        if options.fluxscaleregion is None:
-            # default is HPBW
-            regionradius=15*(150/(1.28*observations[obsid].center_channel))
-        else:
-            try:
-                regionradius=float(options.fluxscaleregion)
-            except ValueError:
-                if os.path.exists(options.fluxscaleregion):
-                    logger.info('Will use MIMAS region %s' % options.fluxscaleregion)
-                    observations[obsid].aegean_region=options.fluxscaleregion
-                    regionradius=None
-                else:
-                    logger.error('Unable to interpret region %s' % options.fluxscaleregion)
-                    eh.exit(1)
-        if regionradius is not None and observations[obsid].aegean_region is None:
-            observations[obsid].aegean_region=circle2mimas(observations[obsid].RA,observations[obsid].Dec,
-                                                           regionradius,
-                                                           '%d.mim' % obsid)
-            logger.info('Will use MIMAS region %s: circle(%.3f,%.3f,%.2f)' % (observations[obsid].aegean_region,
-                                                                             observations[obsid].RA,observations[obsid].Dec,
-                                                                             regionradius))
+        if False:
+            # turn off the self-cal flux scaling
+            # do it wrt GLEAM now
+            if options.fluxscaleregion is None:
+                # default is HPBW
+                regionradius=15*(150/(1.28*observations[obsid].center_channel))
+            else:
+                try:
+                    regionradius=float(options.fluxscaleregion)
+                except ValueError:
+                    if os.path.exists(options.fluxscaleregion):
+                        logger.info('Will use MIMAS region %s' % options.fluxscaleregion)
+                        observations[obsid].aegean_region=options.fluxscaleregion
+                        regionradius=None
+                    else:
+                        logger.error('Unable to interpret region %s' % options.fluxscaleregion)
+                        eh.exit(1)
+            if regionradius is not None and observations[obsid].aegean_region is None:
+                observations[obsid].aegean_region=circle2mimas(observations[obsid].RA,observations[obsid].Dec,
+                                                               regionradius,
+                                                               '%d.mim' % obsid)
+                logger.info('Will use MIMAS region %s: circle(%.3f,%.3f,%.2f)' % (observations[obsid].aegean_region,
+                                                                                  observations[obsid].RA,observations[obsid].Dec,
+                                                                                  regionradius))
                                    
 
     if increasesize and options.autosize>1:
@@ -2551,7 +2988,7 @@ def main():
                 clean_mgain=options.clean_mgain,
                 clean_minuv=options.clean_minuv,
                 clean_maxuv=options.clean_maxuv,
-                clean_threshold=0.01,
+                clean_threshold=options.selfcal_clean_threshold,
                 fullpolarization=True,
                 smallinversion=options.smallinversion,
                 fitbeam=options.fitbeam,
@@ -2567,8 +3004,8 @@ def main():
             residimage=results[0].replace('-image','-residual')
             med,rms=stat_measure(residimage)
             logger.info('Measured rms of %d mJy in %s' % (rms*1e3, residimage))
-            logger.info('Setting clean threshold to %d*rms=%d mJy' % (options.clean_threshold_sigma,
-                                                                      options.clean_threshold_sigma*rms*1e3))
+            logger.info('Setting clean threshold to %d*rms=%.1f mJy' % (options.clean_threshold_sigma,
+                                                                        options.clean_threshold_sigma*rms*1e3))
             observations[observation_data[i]['obsid']].clean_threshold=options.clean_threshold_sigma*rms
 
                 
@@ -2589,23 +3026,25 @@ def main():
                 for image in results:
                     if '-I.fits' in image:
                         Iimage=image
-                if Iimage is None:
-                    logger.warning('Could not find I image for source finding')
-                elif _aegean and options.fluxscale:
-                    try:
-                        observations[observation_data[i]['obsid']].sources,rmsimage,bgimage=find_sources_in_image(Iimage, 
-                                                                                                                  max_summits=5,
-                                                                                                                  csigma=10,
-                                                                                                                  cores=observations[observation_data[i]['obsid']].ncpus,
-                                                                                                                  region=observations[observation_data[i]['obsid']].aegean_region)
-                        #if rmsimage is not None:
-                        #    observations[observation_data[i]['obsid']].filestodelete.append(rmsimage)
-                        #if bgimage is not None:
-                        #    observations[observation_data[i]['obsid']].filestodelete.append(bgimage)
+                if False:
+                    # turn this off for now
+                    if Iimage is None:
+                        logger.warning('Could not find I image for source finding')
+                    elif _aegean and options.fluxscale:
+                        try:
+                            observations[observation_data[i]['obsid']].sources,rmsimage,bgimage=find_sources_in_image(Iimage, 
+                                                                                                                      max_summits=5,
+                                                                                                                      csigma=10,
+                                                                                                                      cores=observations[observation_data[i]['obsid']].ncpus,
+                                                                                                                      region=observations[observation_data[i]['obsid']].aegean_region)
+                            # if rmsimage is not None:
+                            #    observations[observation_data[i]['obsid']].filestodelete.append(rmsimage)
+                            # if bgimage is not None:
+                            #    observations[observation_data[i]['obsid']].filestodelete.append(bgimage)
 
-                    except Exception,e:
-                        logger.error('Unable to run aegean on %s:\n\t%s' % (Iimage,e))
-                        eh.exit(1)
+                        except Exception,e:
+                            logger.error('Unable to run aegean on %s:\n\t%s' % (Iimage,e))
+                            eh.exit(1)
 
                     if len(observations[observation_data[i]['obsid']].sources)==0:
                         logger.warning('Aegean found %d sources in %s' % (len(observations[observation_data[i]['obsid']].sources), Iimage))
@@ -2631,7 +3070,7 @@ def main():
                 else:
                     f=fits.open(result)
                     if f[0].data.max()==0:
-                        logger.error('Model image %s has max of 0' % result)
+                        logger.error('Model image %s has max of 0; you may consider decreasing --selfcalthreshold' % result)
                         eh.exit(1)
             # uncorrect the beam
             results=observations[observation_data[i]['obsid']].pbcorrect(model=True,
@@ -2802,6 +3241,45 @@ def main():
                 eh.exit(1)
 
 
+        if options.fluxscale:
+            if not os.path.exists(options.catalog):
+                logger.warning('Could not find GLEAM catalog %s' % options.catalog)
+            else:
+                observation_data[i]['fluxscale_catalog']=options.catalog
+                # need to find the I image
+                # if subbands, need to make sure it is MFS
+                Iimage=None
+                for image in results:
+                    if options.subbands==1:
+                        if '-I.fits' in image:
+                            Iimage=image
+                    else:
+                        if '-MFS-I.fits' in image:
+                            Iimage=image
+                    out=fluxmatch(Iimage, catalog=options.catalog,
+                                  nsigma=10,
+                                  rmsfactor=4,
+                                  matchradius=60,
+                                  rejectsigma=3,
+                                  maxdistance=20,
+                                  minbeam=0.4,
+                                  psfextent=1.1,
+                                  refineposition=True,
+                                  plot=True,
+                                  update=True,
+                                  cores=1)
+                    if out is None:
+                        logger.warning('Flux match with %s returned None for %s; skipping...' % (options.catalog,
+                                                                                                 Iimage))
+                    else:
+                        fittedratio, fittedratioerr, chisq, ndof, slope, intercept, rashift, decshift=out
+                        observation_data[i]['fluxscale']=fittedratio
+                        observation_data[i]['fluxscale_nsources']=ndof+1
+                        observation_data[i]['fluxscale_chisq']=chisq
+                        observation_data[i]['rashift_sec']=rashift
+                        observation_data[i]['decshift_arcsec']=decshift
+                    
+
         # do another round of source finding if we did selfcal
         if options.selfcal:
             fluxratio=None
@@ -2815,51 +3293,52 @@ def main():
                 else:
                     if '-MFS-I.fits' in image:
                         Iimage=image
-            if Iimage is None:
-                logger.warning('Could not find I image for source finding')
-            elif _aegean and options.fluxscale:
-                try:
-                    newsources,newrmsimage,newbgimage=find_sources_in_image(Iimage, 
-                                                                            max_summits=5,
-                                                                            csigma=10,
-                                                                            cores=observations[observation_data[i]['obsid']].ncpus,
-                                                                            region=observations[observation_data[i]['obsid']].aegean_region)
-                    if newrmsimage is not None:
-                        observations[observation_data[i]['obsid']].filestodelete.append(newrmsimage)
-                    if newbgimage is not None:
-                        observations[observation_data[i]['obsid']].filestodelete.append(newbgimage)
+            if False:
+                if Iimage is None:
+                    logger.warning('Could not find I image for source finding')
+                elif _aegean and options.fluxscale:
+                    try:
+                        newsources,newrmsimage,newbgimage=find_sources_in_image(Iimage, 
+                                                                                max_summits=5,
+                                                                                csigma=10,
+                                                                                cores=observations[observation_data[i]['obsid']].ncpus,
+                                                                                region=observations[observation_data[i]['obsid']].aegean_region)
+                        if newrmsimage is not None:
+                            observations[observation_data[i]['obsid']].filestodelete.append(newrmsimage)
+                        if newbgimage is not None:
+                            observations[observation_data[i]['obsid']].filestodelete.append(newbgimage)
 
-                except Exception,e:
-                    logger.warning('Unable to run aegean on %s:\n\t%s' % (Iimage,e))
-                    #eh.exit(1)
-                    newsources=[]
-                    newrmsimage,newbgimage=None,None
-                if len(newsources)==0:
-                    logger.warning('Aegean found %d sources in %s' % (len(newsources), Iimage))
-                else:
-                    logger.info('Aegean found %d sources in %s' % (len(newsources), Iimage))
-                    origsources, newsources=match_aegean_sources(observations[observation_data[i]['obsid']].sources,
-                                                                 newsources)
-                    if len(origsources)==0:
-                        logger.warning('Could not match sources between images')
+                    except Exception,e:
+                        logger.warning('Unable to run aegean on %s:\n\t%s' % (Iimage,e))
+                        # eh.exit(1)
+                        newsources=[]
+                        newrmsimage,newbgimage=None,None
+                    if len(newsources)==0:
+                        logger.warning('Aegean found %d sources in %s' % (len(newsources), Iimage))
                     else:
-                        origfluxes=numpy.array([s.peak_flux for s in origsources])
-                        newfluxes=numpy.array([s.peak_flux for s in newsources])
-                        fluxratio=numpy.median(newfluxes/origfluxes)
-                        logger.info('Determined median flux ratio of %.2f from %d matched sources' % (fluxratio,
-                                                                                                      len(origfluxes)))
-                        if fluxratio < 0.5 or fluxratio > 2:
-                            logger.warning('Flux ratio exceeds acceptable limits; skipping scaling...')
+                        logger.info('Aegean found %d sources in %s' % (len(newsources), Iimage))
+                        origsources, newsources=match_aegean_sources(observations[observation_data[i]['obsid']].sources,
+                                                                     newsources)
+                        if len(origsources)==0:
+                            logger.warning('Could not match sources between images')
                         else:
-                            for image in results:
-                                try:
-                                    f=fits.open(image,'update')
-                                    f[0].data/=fluxratio
-                                    f[0].header['FLUXSCAL']=(fluxratio,'Ratio of flux compared to pre-selfcal image')
-                                    f.flush()
-                                    logger.info('Divided %s by %.2f to correct flux scale' % (image,fluxratio))
-                                except:
-                                    logger.warning('Unable to correct flux scale for %s' % image)
+                            origfluxes=numpy.array([s.peak_flux for s in origsources])
+                            newfluxes=numpy.array([s.peak_flux for s in newsources])
+                            fluxratio=numpy.median(newfluxes/origfluxes)
+                            logger.info('Determined median flux ratio of %.2f from %d matched sources' % (fluxratio,
+                                                                                                          len(origfluxes)))
+                            if fluxratio < 0.5 or fluxratio > 2:
+                                logger.warning('Flux ratio exceeds acceptable limits; skipping scaling...')
+                            else:
+                                for image in results:
+                                    try:
+                                        f=fits.open(image,'update')
+                                        f[0].data/=fluxratio
+                                        f[0].header['FLUXSCAL']=(fluxratio,'Ratio of flux compared to pre-selfcal image')
+                                        f.flush()
+                                        logger.info('Divided %s by %.2f to correct flux scale' % (image,fluxratio))
+                                    except:
+                                        logger.warning('Unable to correct flux scale for %s' % image)
 
         # for j in xrange(len(results)):
         #    observation_data[i]['corrimages'][j]=results[j]

@@ -1,4 +1,4 @@
-import logging,logging.handlers,datetime,math,sys,socket,os,json,shutil,io
+import logging,logging.handlers,datetime,math,sys,socket,os,json,shutil,io,re
 from optparse import OptionParser,OptionGroup
 import threading
 import urllib2, urllib
@@ -257,7 +257,7 @@ def run_obsdownload(obs,ngashost='fe1.pawsey.ivec.org:7777',
             for i in stat.errors:
                 logger.warning(i)
                 
-            raise Exception()
+            #raise Exception()
         else:
             logger.info('File Transfer Success')
 
@@ -406,6 +406,9 @@ class Observation():
                                                                                                     self.basedir))
             return None
         self.downloadedfiles=run_obsdownload(self.obsid, numdownload=numdownload)
+        downloadedfiles2=run_obsdownload(self.obsid, numdownload=numdownload)
+        for k in downloadedfiles2.keys():
+            self.downloadedfiles[k]=downloadedfiles2[k]
         return self.downloadedfiles
     ##############################
     def makemetafits(self):        
@@ -449,6 +452,19 @@ class Observation():
                 subprocess.Popen(['unzip','-j',f],stderr=subprocess.PIPE,
                                  stdout=subprocess.PIPE)
                 self.useflagfiles=True
+        # cotter gets angry if only one timeslice
+        newfiles=[]
+        for f in self.downloadedfiles:
+            if re.match('\d+_\d+_gpubox\d\d\.fits',f) is not None:
+                logger.warning('Format for %s is wrong; linking %s_00.fits to %s...' % (f,os.path.splitext(f)[0],f))
+                try:
+                    os.symlink(f,'%s_00.fits' % os.path.splitext(f)[0])
+                except OSError:
+                    logger.warning('%s_00.fits exists' % os.path.splitext(f)[0])
+                newfiles.append('%s_00.fits' % os.path.splitext(f)[0])
+        for f in newfiles:
+            self.downloadedfiles[f]=0
+                
         self.cottercommand=['cotter','-j',str(cottercpus),
                             '-m',self.metafits,
                             '-timeres',str(timeres),
@@ -463,7 +479,7 @@ class Observation():
                                  
         if allowmissing:
             self.cottercommand+=['-allowmissing']
-        self.cottercommand+=['*gpubox*.fits']        
+        self.cottercommand+=['*gpubox*_*.fits']        
         self.msfile='%s.ms' % self.obsid
         if os.path.exists(self.msfile):
             if not self.clobber:

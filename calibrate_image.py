@@ -2146,7 +2146,7 @@ def find_beam(image):
     delays=[int(x) for x in f[0].header['DELAYS'].split(',')]
     out=make_beam.make_beam(image, ext=0,
                             delays=delays,
-                            analytic_model=True,
+                            model='analytic',
                             jones=False,
                             precess=False)
     if f[0].header['CRVAL4']==-5:

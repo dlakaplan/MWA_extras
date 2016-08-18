@@ -41,12 +41,21 @@ import mwapy
 from mwapy import metadata
 from mwapy.pb import make_beam
 
+# try to use Peter Williams' casac interface
 try:
     import drivecasa
-    _CASA=True
-
+    _OLDCASA=True
 except ImportError:
-    logger.error('Unable to import drivecasa')
+    #logger.error('Unable to import drivecasa')
+    _OLDCASA=False
+
+try:
+    import casac
+    _CASA=True
+    import pwkit.environments.casa.tasks as tasklib
+    import pwkit.environments.casa.util as casautil
+except ImportError:
+    logger.warning('Unable to import casacore')
     _CASA=False
 
 try:
@@ -54,6 +63,7 @@ try:
     import BANE  
     import MIMAS
     from AegeanTools.regions import Region
+    from AegeanTools import source_finder
     # make the logging output from aegean more reasonable
     logging.getLogger("Aegean").setLevel(logging.INFO)
     _aegean=True
@@ -62,12 +72,11 @@ except ImportError:
     _aegean=False
 
 
+
 ##################################################
-# default search paths for CASAPY and ANOKO/mwa-reduce
-# the CASAPY path should be the directory (i.e., it should contain the casapy executable)
+# default search paths for ANOKO/mwa-reduce
 # the ANOKO path should contain calibrate and applysolutions
 ##################################################
-casapypath=['/usr/local/casapy','/usr/physics/mwa/casa']
 anokopath=['~kaplan/mwa/anoko/mwa-reduce/build/', 
            '/usr/physics/mwa/pkg/anoko/mwa-reduce/build/']
 
@@ -77,9 +86,7 @@ catalogdir=os.path.join(os.path.split(os.path.abspath(__file__))[0],'catalogs')
 #calmodelfile=os.path.join(catalogdir,'model_a-team.txt')
 anokocatalog=os.path.join(catalogdir,'model-catalogue_new.txt')
 calmodelfile=anokocatalog
-casapy=None
 anoko=None
-casa=None
 
 # this defines aliases for source names in the anoko
 # calibrator model file
@@ -247,51 +254,6 @@ def circle2mimas(ra, dec, radius, filename):
     MIMAS.save_region(r, filename)
     return filename
 
-##################################################
-class CASAfinder():
-    """
-    casapy=CASAfinder(<directories>).find()
-    """
-    path=casapypath
-
-    def __init__(self, *args):
-        """
-        CASAfinder(paths=['/usr/local/casapy']):    
-        try to find casapy in the path
-        will also check ENV variables
-        """
-
-        if len(args)>0:
-            self.paths= list(args) + CASAfinder.path
-        else:
-            self.paths=CASAfinder.path
-
-    def find(self):
-        actualcasapy=None
-        if os.environ.has_key('CASAPY'):
-            actualcasapy=os.environ['CASAPY']
-            logger.debug('Identified CASAPY %s from $CASAPY' % actualcasapy)
-        else:
-            for path in self.paths:
-                if path is None:
-                    continue
-                path=os.path.expanduser(path)
-                if os.path.exists(path):
-                    actualcasapy=path
-                    logger.debug('Identified CASAPY %s' % actualcasapy)
-                    break
-                
-
-        if not os.path.exists(actualcasapy):
-            logger.error('CASAPY %s does not exist' % actualcasapy)
-            return None
-        if not os.path.isdir(actualcasapy):
-            newcasapy=os.path.split(actualcasapy)[0]
-            logger.warning('CASAPY %s does not appear to be a directory; trying %s' % (actualcasapy,
-                                                                                       newcasapy))
-            actualcasapy=newcasapy
-
-        return actualcasapy
 
 ##################################################
 class ANOKOfinder():
@@ -360,6 +322,7 @@ def makemetafits(obsid, directory=None):
         logger.error('Unable to write metafits file %s:\n%s' % (metafits,e))
         return None
 
+
 ##################################################
 def get_msinfo(msfile):
     """
@@ -368,67 +331,32 @@ def get_msinfo(msfile):
     inttime is integration time in s
     otherkeys is a dictionary containing other header keywords
     """
-
     if not _CASA:
-        logger.error('requires drivecasa')
+        logger.error("CASA operation not possible")
         return None
 
-    try:
-        casa = drivecasa.Casapy(casa_dir=casapy,
-                                working_dir=os.path.abspath(os.curdir),
-                                timeout=1200)
-    except Exception, e:
-        logger.error('Unable to instantiate casa:\n%s' % e)
-        return None
+    
+    ms=casac.casac.ms()
+    ms.open(msfile)
+    chanwidth=ms.getspectralwindowinfo()["0"]['ChanWidth']/1e3
+    nchans=ms.getspectralwindowinfo()["0"]['NumChan']
+    inttime=ms.getscansummary()['1']['0']['IntegrationTime']
+    reffreq=ms.getspectralwindowinfo()["0"]['RefFreq']
+    ms.close()
+    t=casac.casac.table()
+    t.open(msfile)
+    otherkeys=t.getkeywords()
+    t.close()
 
-    command=['import casac',
-             'ms=casac.casac.ms()',
-             'ms.open("%s")' % msfile,
-             'print "chanwidth=%d" % (ms.getspectralwindowinfo()["0"]["ChanWidth"]/1e3)',
-             'print "nchans=%d" % (ms.getspectralwindowinfo()["0"]["NumChan"])',
-             'print "inttime=%f" % (ms.getscansummary()["1"]["0"]["IntegrationTime"])',
-             'print "reffreq=%f" % (ms.getspectralwindowinfo()["0"]["RefFreq"])',
-             'print ms.close()',
-             't=casac.casac.table()',
-             't.open("%s")' % msfile,
-             'keys=t.getkeywords()',
-             't.close()',
-             'print "\\n".join(["%s=%s" % (k,keys[k]) for k in keys.keys()])',
-             'clearstat()']
-             
-    logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
-    try:
-        result=casa.run_script(command)
-    except:
-        logger.error('CASA returned some errors getting ms info for %s' % msfile)
-        return None
-    if len(result[1])>0:
-        logger.error('CASA returned some errors:\n\t%s' % '\n\t'.join(result[1]))
-        return None
-    chanwidth=None
-    inttime=None
-    nchans=None
-    reffreq=None
-    otherkeys={}
-    for l in result[0]:
-        if 'chanwidth' in l:
-            chanwidth=float(l.split('=')[1])
-            logger.debug('Determined channel width of %d kHz for %s' % (chanwidth,msfile))
-        elif 'inttime' in l:
-            inttime=float(l.split('=')[1])
-            logger.debug('Determined integration time of %.1f s for %s' % (inttime,msfile))
-        elif 'nchans' in l:
-            nchans=int(l.split('=')[1])
-            logger.debug('Determined %d channels for %s' % (nchans,msfile))
-        elif 'reffreq' in l:
-            reffreq=float(l.split('=')[1])
-            logger.debug('Determined reference frequency of %.1f MHz for %s' % (reffreq/1e6,msfile))
-        elif '=' in l:
-            k,v=l.split('=')
-            otherkeys[k]=v
+    logger.debug('Determined channel width of %d kHz for %s' % (chanwidth,msfile))
+    logger.debug('Determined integration time of %.1f s for %s' % (inttime,msfile))
+    logger.debug('Determined %d channels for %s' % (nchans,msfile))
+    logger.debug('Determined reference frequency of %.1f MHz for %s' % (reffreq/1e6,msfile))
 
     return chanwidth, inttime, nchans, reffreq, otherkeys
+
     
+
 ##################################################
 def check_calibrated(msfile):
     """
@@ -436,60 +364,12 @@ def check_calibrated(msfile):
     checks for presence of CORRECTED_DATA column in a ms file
     """
     if not _CASA:
-        logger.error('requires drivecasa')
+        logger.error("CASA operation not possible")
         return None
 
-    try:
-        casa = drivecasa.Casapy(casa_dir=casapy,
-                                working_dir=os.path.abspath(os.curdir),
-                                timeout=1200)
-    except Exception, e:
-        logger.error('Unable to instantiate casa:\n%s' % e)
-        return None
-
-    command=['import casac',
-             't=casac.casac.table()',
-             't.open("%s")' % msfile,
-             'print "CORRECTED_DATA" in t.colnames()']
-             
-    logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
-    result=casa.run_script(command)
-    if len(result[1])>0:
-        logger.error('CASA returned some errors:\n\t%s' % '\n\t'.join(result[1]))
-        return None
-    for l in result[0]:
-        if len(l)>0 and l=='True':
-            return True
-        if len(l)>0 and l=='False':
-            return False
-    return None
-##################################################
-def getcasaversion():
-    """
-    getcasaversion()
-    returns CASA version string
-    """
-    if not _CASA:
-        logger.error('requires drivecasa')
-        return None
-
-    try:
-        casa = drivecasa.Casapy(casa_dir=casapy,
-                                working_dir=os.path.abspath(os.curdir),
-                                timeout=1200)
-        
-    except Exception, e:
-        logger.error('Unable to instantiate casa:\n%s' % e)
-        return None
-
-    command=['pass']
-             
-    logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
-    result=casa.run_script(command)
-    if len(result[1])>0:
-        logger.error('CASA returned some errors:\n\t%s' % '\n\t'.join(result[1]))
-        return None
-    return result[0]
+    t=casac.casac.table()
+    t.open(msfile)
+    return "CORRECTED_DATA" in t.colnames()
 
 
 ##################################################
@@ -503,43 +383,31 @@ def calibrate_casa(obsid, directory=None, minuv=60):
     if not _CASA:
         logger.error("CASA operation not possible")
         return None
-    basedir=os.path.abspath(os.curdir)
-    try:
-        casa = drivecasa.Casapy(casa_dir=casapy,
-                                working_dir=basedir,
-                                timeout=7200)
-    except Exception, e:
-        logger.error('Unable to instantiate casa:\n%s' % e)
-        return None
 
+    basedir=os.path.abspath(os.curdir)
     if directory is None:
         directory=basedir
+    from mwapy import casac_ft_beam as ft_beam
     if minuv is not None:
-        command=['from mwapy import ft_beam',
-                 """ft_beam.ft_beam(vis='%s.ms',uvrange='>%dm',outdir='%s')""" % (obsid,minuv,directory)]
+        result=ft_beam.ft_beam(vis='%s.ms' % obsid,
+                               uvrange='>%dm' % minuv,
+                               outdir='%s' % directory)
     else:
-        command=['from mwapy import ft_beam',
-                 """ft_beam.ft_beam(vis='%s.ms',outdir='%s')""" % (obsid,directory)]
-
-    command+=['clearstat()']
-    logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
-    result=casa.run_script(command)
-    if len(result[1])>0:
-        logger.error('CASA/ft_beam returned some errors:\n\t%s' % '\n\t'.join(result[1]))
+        result=ft_beam.ft_beam(vis='%s.ms' % obsid,
+                               outdir='%s' % directory)
+    if result is None:
+        logger.error('Unable to create calibration table')
         return None
-    outfile=None
-    for line in result[0]:
-        if 'Created' in line:
-            outfile=line.split()[1].replace('!','')
-    if outfile is None:
-        logger.error('No output created:\n\t%s' % ('\n\t'.join(result[0])))
-        return None
+    else:
+        outfile=result
     # that file should be the same as the expected output
     if not os.path.split(outfile)[-1] == '%s.cal' % obsid:
         logger.error('CASA calibration produced %s, but expected %s.cal' % (outfile,
                                                                             obsid))
         return None
     return outfile
+
+
 
 ##################################################
 def selfcalibrate_casa(obsid, suffix=None, directory=None, minuv=60):
@@ -560,34 +428,25 @@ def selfcalibrate_casa(obsid, suffix=None, directory=None, minuv=60):
         calfile=os.path.join(directory, calfile)
 
     basedir=os.path.abspath(os.curdir)
-    try:
-        casa = drivecasa.Casapy(casa_dir=casapy,
-                                working_dir=basedir,
-                                timeout=3600)
-    except Exception, e:
-        logger.error('Unable to instantiate casa:\n%s' % e)
-        return None
         
     if directory is None:
         directory=basedir
     if minuv is not None:
-        command=['from taskinit import *',
-                 'import tasks',
-                 """tasks.bandpass(vis='%s.ms',caltable='%s',refant='Tile012',uvrange='>%dm')""" % (obsid,
-                                                                                                    calfile,
-                                                                                                    minuv)]
+        uvrange='>%dm' % minuv
     else:
-        command=['from taskinit import *',
-                 'import tasks',
-                 """tasks.bandpass(vis='%s.ms',caltable='%s',refant='Tile012')""" % (obsid,
-                                                                                     calfile)]
-                                                                                     
-
-    command+=['clearstat()']
-    logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
-    result=casa.run_script(command)
-    if len(result[1])>0:
-        logger.error('CASA/bandpass returned some errors:\n\t%s' % '\n\t'.join(result[1]))
+        uvrange=''
+    cfg=tasklib.GaincalConfig()
+    cfg.vis='%s.ms' % obsid
+    cfg.caltable=calfile
+    cfg.refant='Tile012'
+    cfg.uvrange=uvrange
+    cfg.gaintype = 'B'
+    cfg.combine = ['scan']
+    cfg.solint = 'inf'
+    cfg.solnorm = True
+    try:
+        tasklib.gaincal(cfg)
+    except:
         return None
     if not os.path.exists(calfile):
         logger.error('Expected CASA output %s does not exist' % calfile)
@@ -605,25 +464,16 @@ def applycal_casa(obsid, calfile):
         logger.error("CASA operation not possible")
         return None
     basedir=os.path.abspath(os.curdir)
+
+    cfg=tasklib.ApplycalConfig()
+    cfg.vis='%s.ms' % obsid
+    cfg.gaintable=[calfile]
     try:
-        casa = drivecasa.Casapy(casa_dir=casapy,
-                                working_dir=basedir,
-                                 timeout=7200)
-
-    except Exception, e:
-        logger.error('Unable to instantiate casa:\n%s' % e)
-        return None
-
-    command=['applycal(vis="%s.ms", gaintable="%s")' % (obsid,
-                                                        calfile)]
-    command+=['clearstat()']
-    logger.debug('Will run in casa:\n\t%s' % '\n\t'.join(command))
-    result=casa.run_script(command)
-    # this doesn't really produce output
-    if len(result[1])>0:
-        logger.error('CASA/applycal returned some errors:\n\t%s' % '\n\t'.join(result[1]))
+        tasklib.applycal(cfg)
+    except:
         return None
     return True
+
 
 ##################################################
 def extract_calmodel(filename, sourcename):
@@ -2659,24 +2509,7 @@ def main():
         eh.exit(1)
 
     ##################################################
-    # figure out where CASA lives
-    ##################################################
-    global casapy
-    if options.casapy is not None:
-        casapy=CASAfinder(options.casapy).find()
-    else:
-        casapy=CASAfinder().find()
-    if casapy is None:
-        if options.casapy is not None:
-            searchpath=CASAfinder(options.casapy).paths
-        else:
-            searchpath=CASAfinder().paths
-        logger.error('Unable to find CASAPY in search path:\n\t%s' % ('\n\t'.join(searchpath)))
-        eh.exit(1)
-
-
-    ##################################################
-    # and anoko executables
+    # figure out where anoko executables are
     ##################################################
     global anoko
     if options.anoko is not None:
@@ -2705,8 +2538,7 @@ def main():
                             stdout=subprocess.PIPE).communicate()[0].strip()
     wscleanversion=result.split('\n')[0].split('version')[1].strip()
     logger.debug('Using wsclean version %s' % wscleanversion)
-    casapyversion='-'.join(os.path.realpath(casapy).split('-')[1:])
-    logger.debug('Using casapy version %s' % casapyversion)
+    #logger.debug('Using casapy version %s' % casapyversion)
 
     # figure out which if any is a calibrator
     # and which sources it would apply to
@@ -3186,7 +3018,7 @@ def main():
             if j==0:
                 observation_data[i]['exposure_time']=f[0].header['EXPOSURE']
 
-            f[0].header['CASAVER']=(casapyversion,'CASAPY version')
+            #f[0].header['CASAVER']=(casapyversion,'CASAPY version')
             f[0].header['MWAPYVER']=(mwapy.__version__,'MWAPY version')
             f[0].header['WSCLNVER']=(wscleanversion,'WSCLEAN version')
             f[0].header['COTTRVER']=(observation_data[i]['ms_cotterversion'],'Cotter version')

@@ -31,7 +31,7 @@ import find_calibrator
 ################################################################################
 
 KEY_FILE = os.path.join(os.getenv('HOME'),'obskey.key')
-CERT_FILE = os.path.join(os.getenv('HOME')'obscrt.crt')
+CERT_FILE = os.path.join(os.getenv('HOME'),'obscrt.crt')
 
 ######################################################################
 class HTTPSClientAuthConnection(HTTPSConnection):
@@ -61,6 +61,8 @@ class HTTPSClientAuthConnection(HTTPSConnection):
             self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file, ca_certs=self.ca_file, cert_reqs=ssl.CERT_REQUIRED)
         else:
             self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file, cert_reqs=ssl.CERT_NONE)
+
+
 
 class FileStatus():
     def __init__(self, numfiles):
@@ -124,6 +126,7 @@ def query_observation(obs, host, flagonly, uvfits, chstart, chcount):
 
     response = None
     try:
+
         conn = HTTPSClientAuthConnection(host, key_file = KEY_FILE,
                                                 cert_file = CERT_FILE)
         conn.request('GET', '/QUERY?query=files_like&like=%s%%&format=json' % obs)
@@ -242,7 +245,7 @@ def download_worker(url, host, size, filename, sem, out, stat, bufsize):
 
 
 ######################################################################
-def run_obsdownload(obs,ngashost='fe1.pawsey.ivec.org:7777',
+def run_obsdownload(obs,ngashost='fe1.pawsey.ivec.org:8777',
                     numdownload=4):
     try:
         # get system TCP buffer size
@@ -254,30 +257,28 @@ def run_obsdownload(obs,ngashost='fe1.pawsey.ivec.org:7777',
             logger.error('Number of simultaneous downloads must be > 0 and <= 6')
             return None
 
-        logger.info('Finding observation %s' % (time.strftime('%c'), options.obs,))
+        logger.info('Finding observation %s' % (obs,))
             
-        fileresult = query_observation(options.obs, options.ngashost,
-                                       options.flagfile, options.uvfits,
-                                       options.chstart, options.chcount)
-        
+        fileresult = query_observation(obs, ngashost,
+                                       False,False,None,24)
+
         if len(fileresult) <= 0:
-            logger.error('No file(s) found for observation %s' % (time.strftime('%c'),
-                                                                  options.obs,))
+            logger.error('No file(s) found for observation %s' % (obs,))
             return None
 
-        logger.info('Found %s files' % (time.strftime('%c'), str(len(fileresult)),))
+        logger.info('Found %s files' % (str(len(fileresult)),))
 
         outputdir=os.path.join(os.curdir,
                                str(obs),'')
-        if not os.path.exists(outdir):
-            os.makedirs(outdir)
+        if not os.path.exists(outputdir):
+            os.makedirs(outputdir)
 
         urls = []
         stat = FileStatus(len(fileresult))
 
         for key, value in fileresult.items():
-            url = 'https://%s/RETRIEVE?file_id=%s' % (options.ngashost, key)
-            if check_complete(key, int(value), outdir) is False:
+            url = 'https://%s/RETRIEVE?file_id=%s' % (ngashost, key)
+            if check_complete(key, int(value), outputdir) is False:
                 urls.append((url, value, key))
             else:
                 stat.file_complete(key)
@@ -288,8 +289,8 @@ def run_obsdownload(obs,ngashost='fe1.pawsey.ivec.org:7777',
             while True:
                 if sem.acquire(blocking = False):
                     t = threading.Thread(target = download_worker,
-                                         args = (u[0], options.ngashost, u[1], u[2],
-                                                 sem, outdir, stat, int(bufsize)))
+                                         args = (u[0], ngashost, u[1], u[2],
+                                                 sem, outputdir, stat, int(bufsize)))
                     t.setDaemon(True)
                     t.start()
                     threads.append(t)
@@ -304,16 +305,16 @@ def run_obsdownload(obs,ngashost='fe1.pawsey.ivec.org:7777',
                 if not t.isAlive():
                     threads.remove(t)
 
-        logger.info('File Transfer Complete.' % (time.strftime('%c')))
+        logger.info('File Transfer Complete.')
 
         # check if we have errors
         if stat.errors:
-            logger.warning('File Transfer Error Summary:' % (time.strftime('%c')))
+            logger.warning('File Transfer Error Summary:')
             for errs in stat.errors:
                 logger.warning(errs)
                 raise Exception()
         else:
-            logger.info('File Transfer Success.' % (time.strftime('%c')))
+            logger.info('File Transfer Success.')
         return fileresult
 
     except KeyboardInterrupt as k:

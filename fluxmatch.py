@@ -9,9 +9,10 @@ from astropy.table import Table,Column
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.wcs import WCS
-import aegean,BANE,MIMAS
+import BANE  
+import MIMAS
 from AegeanTools.regions import Region
-
+from AegeanTools import source_finder
 import mwapy
 from mwapy.pb import make_beam
 from mwapy import metadata
@@ -36,10 +37,10 @@ def get_rms_background(imagename, cores=16):
     return rmsimage, bgimage
     
 ######################################################################
-def find_sources_in_image(imagename, max_summits=5, innerclip=10, usebane=True,
+def find_sources_in_image(imagename, max_summits=5, nsigma=10, usebane=True,
                           region=None, cores=16):
     """
-    sources,rmsimage,bgimage=find_sources_in_image(imagename, max_summits=5, innerclip=10, usebane=True, region=None, cores=16)
+    sources,rmsimage,bgimage=find_sources_in_image(imagename, max_summits=5, nsigma=10, usebane=True, region=None, cores=16)
     runs aegean.find_sources_in_image
     but first runs BANE to get the BG/rms estimates
     if region is supplied (.mim format) only sources inside that will be identified
@@ -49,13 +50,14 @@ def find_sources_in_image(imagename, max_summits=5, innerclip=10, usebane=True,
     else:
         rmsimage,bgimage=None,None
 
-    sources=aegean.find_sources_in_image(imagename,
-                                         max_summits=max_summits,
-                                         innerclip=innerclip,
-                                         rmsin=rmsimage,
-                                         bkgin=bgimage,
-                                         mask=region,
-                                         cores=cores)
+    sf=source_finder.SourceFinder(log=logging.getLogger('fluxmatch'))
+    sources=sf.find_sources_in_image(imagename,
+                                                               max_summits=max_summits,
+                                                               innerclip=nsigma,
+                                                               rmsin=rmsimage,
+                                                               bkgin=bgimage,
+                                                               mask=region,
+                                                               cores=cores)
     return sources,rmsimage,bgimage
 
 ######################################################################
@@ -169,7 +171,7 @@ def fluxmatch(image,
         beam=None
     outbase=os.path.splitext(image)[0]           
     sources, rmsimage, bgimage=find_sources_in_image(image,
-                                                     innerclip=nsigma,
+                                                     nsigma=nsigma,
                                                      cores=cores)
     logger.info('Found %d sources above %d sigma in %s' % (len(sources),
                                                            nsigma,
@@ -211,8 +213,12 @@ def fluxmatch(image,
     sourcesTable.add_column(Column(coords.separation(pointingcenter).to(u.deg),
                                    name='SOURCEDIST'))
     if beam is not None:
-        sourcesTable.add_column(Column(fbeam[0].data[0,0,numpy.int16(y),
-                                                     numpy.int16(x)],
+        pixelx,pixely=numpy.int16(x),numpy.int16(y)
+        pixelx[pixelx<0]=0
+        pixely[pixely<0]=0
+        pixelx[pixelx>=fbeam[0].data.shape[-1]]=fbeam[0].data.shape[-1]-1
+        pixely[pixely>=fbeam[0].data.shape[-2]]=fbeam[0].data.shape[-2]-1
+        sourcesTable.add_column(Column(fbeam[0].data[0,0,pixelx,pixely],
                                        name='BEAM'))
     else:
         sourcesTable.add_column(Column(0*x,

@@ -59,7 +59,6 @@ except ImportError:
     _CASA=False
 
 try:
-    import aegean
     import BANE  
     import MIMAS
     from AegeanTools.regions import Region
@@ -443,7 +442,7 @@ def selfcalibrate_casa(obsid, suffix=None, directory=None, minuv=60):
     cfg.gaintype = 'B'
     cfg.combine = ['scan']
     cfg.solint = 'inf'
-    cfg.solnorm = True
+    cfg.solnorm = False
     try:
         tasklib.gaincal(cfg)
     except:
@@ -673,33 +672,6 @@ def identify_calibrators(observation_data):
     return calibrators, notcalibrators, cal_observations
 
 
-######################################################################
-def find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True, region=None, cores=16):
-    """
-    sources,rmsimage,bgimage=find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True, region=None, cores=16)
-    runs aegean.find_sources_in_image
-    but first runs BANE to get the BG/rms estimates
-    if region is supplied (.mim format) only sources inside that will be identified
-    """
-    if usebane:
-        outbase=os.path.splitext(imagename)[0]
-        BANE.filter_image(imagename, 
-                          outbase,
-                          mask=False, 
-                          cores=cores)
-        rmsimage=outbase + '_rms.fits'
-        bgimage=outbase + '_bkg.fits'
-    else:
-        rmsimage,bgimage=None,None
-
-    sources=aegean.find_sources_in_image(imagename,
-                                         max_summits=max_summits,
-                                         csigma=csigma,
-                                         rmsin=rmsimage,
-                                         bkgin=bgimage,
-                                         mask=region,
-                                         cores=cores)
-    return sources,rmsimage,bgimage
 ######################################################################
 class Observation(metadata.MWA_Observation):
 
@@ -1946,10 +1918,10 @@ def get_rms_background(imagename, cores=16):
     return rmsimage, bgimage
     
 ######################################################################
-def find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True,
+def find_sources_in_image(imagename, max_summits=5, nsigma=10, usebane=True,
                           region=None, cores=16):
     """
-    sources,rmsimage,bgimage=find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True, region=None, cores=16)
+    sources,rmsimage,bgimage=find_sources_in_image(imagename, max_summits=5, nsigma=10, usebane=True, region=None, cores=16)
     runs aegean.find_sources_in_image
     but first runs BANE to get the BG/rms estimates
     if region is supplied (.mim format) only sources inside that will be identified
@@ -1959,13 +1931,13 @@ def find_sources_in_image(imagename, max_summits=5, csigma=10, usebane=True,
     else:
         rmsimage,bgimage=None,None
 
-    sources=aegean.find_sources_in_image(imagename,
-                                         max_summits=max_summits,
-                                         csigma=csigma,
-                                         rmsin=rmsimage,
-                                         bkgin=bgimage,
-                                         mask=region,
-                                         cores=cores)
+    sources=source_finder.SourceFinder().find_sources_in_image(imagename,
+                                                               max_summits=max_summits,
+                                                               innerclip=nsigma,
+                                                               rmsin=rmsimage,
+                                                               bkgin=bgimage,
+                                                               mask=region,
+                                                               cores=cores)
     return sources,rmsimage,bgimage
 
 ######################################################################
@@ -2074,7 +2046,7 @@ def fluxmatch(image,
         beam=None
     outbase=os.path.splitext(image)[0]           
     sources, rmsimage, bgimage=find_sources_in_image(image,
-                                                     csigma=nsigma,
+                                                     nsigma=nsigma,
                                                      cores=cores)
     logger.info('Found %d sources above %d sigma in %s' % (len(sources),
                                                            nsigma,
@@ -2866,7 +2838,7 @@ def main():
                         try:
                             observations[observation_data[i]['obsid']].sources,rmsimage,bgimage=find_sources_in_image(Iimage, 
                                                                                                                       max_summits=5,
-                                                                                                                      csigma=10,
+                                                                                                                      nsigma=10,
                                                                                                                       cores=observations[observation_data[i]['obsid']].ncpus,
                                                                                                                       region=observations[observation_data[i]['obsid']].aegean_region)
                             # if rmsimage is not None:
@@ -3132,7 +3104,7 @@ def main():
                     try:
                         newsources,newrmsimage,newbgimage=find_sources_in_image(Iimage, 
                                                                                 max_summits=5,
-                                                                                csigma=10,
+                                                                                nsigma=10,
                                                                                 cores=observations[observation_data[i]['obsid']].ncpus,
                                                                                 region=observations[observation_data[i]['obsid']].aegean_region)
                         if newrmsimage is not None:

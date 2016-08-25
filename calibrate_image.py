@@ -13,7 +13,7 @@ To debug:
 
 """
 
-import logging,logging.handlers,datetime,math,sys,socket,os,shutil,io
+import logging,logging.handlers,datetime,math,sys,socket,os,shutil,io,re
 try:
     import matplotlib
     matplotlib.use('PDF')
@@ -211,7 +211,7 @@ def stat_measure(image, fraction=0.5, nonan=True):
     xtouse=nx*fraction
     xstart=(nx/2)-xtouse/2
     xstop=(nx/2)+xtouse/2
-    d=(data[:,:,ystart:ystop,xstart:xstop]).flatten()
+    d=(data[:,:,int(ystart):int(ystop),int(xstart):int(xstop)]).flatten()
     if nonan:
         d=d[~numpy.isnan(d)]
     q1,m,q2=numpy.percentile(d, [25,50,75])
@@ -370,6 +370,326 @@ def check_calibrated(msfile):
     t.open(msfile)
     return "CORRECTED_DATA" in t.colnames()
 
+##################################################
+# from mwapy/casac_ft_beam
+# based on mwapy/ft_beam
+# Generate automatic calibration model and form a bandpass solution
+
+# Natasha Hurley-Walker 10/07/2013
+# Updated 08/08/2013 to scale the YY and XX beams separately
+# Updated 01/10/2013 Use the field name as the calibrator name if the calibrator wasn't filled in properly during scheduling
+# Updated 21/11/2013 Added sub-calibrators to complex fields (but didn't find much improvement)
+# Updated 02/12/2013 Added a spectral beam option; turned subcalibrators off by default
+# Updated 10/03/2014 Try to get the calibrator information from the metafits file
+# Updated 18/08/2014 Improved astropy/pyfits compatibility and added option to switch off beam correction
+# updated 18/08/2016 to use Peter William's casa python bindings instead of being called from within casa environment (DLK)
+
+
+
+##################################################
+def importfits(fitsimage, imagename):
+   """
+   A simplified version of task_importfits
+   """
+   ia = casautil.tools.image ()
+   ia.fromfits(imagename, fitsimage)
+
+##################################################
+
+def ft_beam(vis=None,refant='Tile012',clobber=True,correct_beam=True,
+            spectral_beam=False,
+            subcalibrator=False,uvrange='>0.03klambda',
+            outdir='./'):
+    """
+    def ft_beam(vis=None,refant='Tile012',clobber=True,correct_beam=True
+    spectral_beam=False,
+    subcalibrator=False,uvrange='>0.03klambda',outdir='./'):
+    
+    # Reference antenna
+    refant='Tile012'
+    # Overwrite files
+    clobber=True
+    # Option to correct for the attenuation effects of the primary beam
+    correct_beam=True
+    # Option to include the spectral index of the primary beam
+    spectral_beam=False
+    # Option to add more sources to the field
+    """
+    modeldir=os.environ['MWA_CODE_BASE']+'/MWA_Tools/Models/'
+    if not os.path.exists(modeldir):
+        logger.error('Model directory %s does not exist' % modeldir)
+        return None
+
+    qa = casautil.tools.quanta()
+
+    # output calibration solution
+    caltable=os.path.join(outdir,re.sub('ms','cal',vis))
+    if vis is None or len(vis)==0 or not os.path.exists(vis):
+        logger.error('Input visibility must be defined')
+        return None
+   
+    # Get the frequency information of the measurement set
+    ms=casac.casac.ms()
+    ms.open(vis)
+    rec = ms.getdata(['axis_info'])
+    df,f0 = (rec['axis_info']['freq_axis']['resolution'][len(rec['axis_info']['freq_axis']['resolution'])/2],rec['axis_info']['freq_axis']['chan_freq'][len(rec['axis_info']['freq_axis']['resolution'])/2])
+    F =rec['axis_info']['freq_axis']['chan_freq'].squeeze()/1e6
+    df=df[0]*len(rec['axis_info']['freq_axis']['resolution'])
+    f0=f0[0]
+    rec_time=ms.getdata(['time'])
+    sectime=qa.quantity(rec_time['time'][0],unitname='s')
+    midfreq=f0
+    bandwidth=df
+    if isinstance(qa.time(sectime,form='fits'),list):
+        dateobs=qa.time(sectime,form='fits')[0]
+    else:
+        dateobs=qa.time(sectime,form='fits')
+
+    if spectral_beam:
+        # Start and end of the channels so we can make the spectral beam image
+        startfreq=f0-df/2
+        endfreq=f0+df/2
+        freq_array=[midfreq,startfreq,endfreq]
+    else:
+        freq_array=[midfreq]
+
+    # Get observation number directly from the measurement set
+    tb=casac.casac.table()
+    tb.open(vis+'/OBSERVATION')
+    obsnum=int(tb.getcol('MWA_GPS_TIME'))
+    tb.close
+
+    # Try getting the calibrator information from the metafits file
+
+    metafits=str(obsnum)+'.metafits'
+    calibrator=""
+    if os.path.exists(metafits):
+        hdu_in=fits.open(metafits)
+        try:
+            calibrator=hdu_in[0].header['CALIBSRC']
+            str_delays=hdu_in[0].header['DELAYS']
+            delays=[int(x) for x in str_delays.split(',')]
+        except:
+            logger.warning('Unable to retrieve calibrator from metafits file.')
+
+    if not calibrator:
+        logger.warning('Could not use the metafits file: trying the observation database.')
+        info=metadata.MWA_Observation(obsnum)
+        logger.info('Retrieved observation info for %d...\n%s\n' % (obsnum,info))
+
+        # Calibrator information
+        if info.calibration:
+            calibrator=info.calibrators
+        else:
+            # Observation wasn't scheduled properly so calibrator field is missing: try parsing the fieldname
+            # assuming it's something like 3C444_81
+            calibrator=info.filename.rsplit('_',1)[0]
+        # Delays
+        delays=info.delays
+        str_delays=','.join(map(str,delays))
+
+    logger.info('Calibrator is %s...' % calibrator)
+    logger.info('Delays are: %s' % str_delays)
+
+    # subcalibrators not yet improving the calibration, probably due to poor beam model
+    if subcalibrator and calibrator=='PKS0408-65':
+        subcalibrator='PKS0410-75'
+    elif subcalibrator and calibrator=='HerA':
+        subcalibrator='3C353'
+    else:
+        subcalibrator=False
+
+    # Start models are 150MHz Jy/pixel fits files in a known directory
+    model=modeldir+calibrator+'.fits'
+    # With a corresponding spectral index map
+    spec_index=modeldir+calibrator+'_spec_index.fits'
+
+    if not os.path.exists(model):
+        logger.error('Could not find calibrator model %s' % model)
+        return None
+   
+    # load in the model FITS file as a template for later
+    ftemplate=fits.open(model)
+
+    # do this for the start, middle, and end frequencies
+    for freq in freq_array:
+        freqstring=str(freq/1.0e6) + 'MHz'
+        # We'll generate images in the local directory at the right frequency for this ms
+        outname=os.path.join(outdir,calibrator+'_'+freqstring)
+        outnt2=os.path.join(outdir,calibrator+'_'+freqstring+'_nt2')
+        # import model, edit header so make_beam generates the right beam in the right place
+        if os.path.exists(outname + '.fits') and clobber:
+            os.remove(outname + '.fits')
+        shutil.copy(model,outname + '.fits')
+        fp=fits.open(outname + '.fits','update')
+        try:
+            fp[0].header['CRVAL3']=freq
+            fp[0].header['CDELT3']=bandwidth
+            fp[0].header['DATE-OBS']=dateobs
+        except KeyError:
+            fp[0].header.update('CRVAL3',freq)
+            fp[0].header.update('CDELT3',bandwidth)
+            fp[0].header.update('DATE-OBS',dateobs)
+        fp.flush()
+  
+        logger.info('Creating primary beam models...')
+        beamarray=make_beam.make_beam(outname + '.fits',
+                                      model='analytic',
+                                      delays=delays)
+        # delete the temporary model
+        os.remove(outname + '.fits')
+
+        beamimage={}
+
+        for stokes in ['XX','YY']:
+            beamimage[stokes]=os.path.join(outdir, calibrator + '_' + freqstring + '_beam' + stokes + '.fits')
+
+    # scale by the primary beam
+    # Correct way of doing this is to generate separate models for XX and YY
+    # Unfortunately, ft doesn't really understand cubes
+    # So instead we just use the XX model, and then scale the YY solution later
+
+    freq=midfreq
+    freqstring=str(freq/1.0e6)+'MHz'
+    outname=os.path.join(outdir,calibrator+'_'+freqstring)
+    outnt2=os.path.join(outdir,calibrator+'_'+freqstring+'_nt2')
+    if isinstance(outname, unicode):      
+        outname=outname.encode('ascii')
+    if isinstance(outnt2, unicode):      
+        outnt2=outnt2.encode('ascii')
+
+    # divide to make a ratio beam, so we know how to scale the YY solution later
+    fbeamX=fits.open(beamimage['XX'])
+    fbeamY=fits.open(beamimage['YY'])
+    if correct_beam:
+        ratiovalue=(fbeamX[0].data/fbeamY[0].data).mean()
+        logger.info('Found <XX/YY>=%.2f' % ratiovalue)
+    else:
+        ratiovalue=1.0
+        logger.info('Not correcting for the beam: using <XX/YY>=%.2f' % ratiovalue)
+
+    # Models are at 150MHz
+    # Generate scaled image at correct frequency
+    if os.path.exists(outname + '.fits') and clobber:
+        os.remove(outname + '.fits')
+    # Hardcoded to use the XX beam in the model
+    fbeam=fbeamX
+    fmodel=fits.open(model)
+    fspec_index=fits.open(spec_index)
+
+    if correct_beam:
+        ftemplate[0].data=fbeam[0].data * fmodel[0].data/((150000000/f0)**(fspec_index[0].data))
+    else:
+        ftemplate[0].data=fmodel[0].data/((150000000/f0)**(fspec_index[0].data))
+       
+    try:
+        ftemplate[0].header['CRVAL3']=freq
+        ftemplate[0].header['CDELT3']=bandwidth
+        ftemplate[0].header['DATE-OBS']=dateobs
+        ftemplate[0].header['CRVAL4']=1
+    except KeyError:
+        ftemplate[0].header.update('CRVAL3',freq)
+        ftemplate[0].header.update('CDELT3',bandwidth)
+        ftemplate[0].header.update('DATE-OBS',dateobs)
+        ftemplate[0].header.update('CRVAL4',1)
+        
+    ftemplate.writeto(outname + '.fits')
+    logger.info('Wrote scaled model to %s' % (outname + '.fits'))
+    foutname=fits.open(outname + '.fits')
+   
+    # Generate 2nd Taylor term
+    if os.path.exists(outnt2 + '.fits') and clobber:
+        os.remove(outnt2 + '.fits')
+
+    if correct_beam:
+        if spectral_beam:
+            # Generate spectral image of the beam
+            fcalstart=fits.open(calibrator+'_'+str(startfreq/1.0e6)+'MHz_beamXX.fits')
+            fcalend=fits.open(calibrator+'_'+str(endfreq/1.0e6)+'MHz_beamXX.fits')   
+            ftemplate[0].data=(numpy.log(fcalstart[0].data/fcalend[0].data)/
+                               numpy.log((f0-df/2)/(f0+df/2)))
+            beam_spec='%s_%sMHz--%sMHz_beamXX.fits' % (calibrator,
+                                                       str(startfreq/1.0e6),
+                                                       str(endfreq/1.0e6))
+            if os.path.exists(beam_spec):
+                os.remove(beam_spec)
+            ftemplate.writeto(beam_spec)
+            fbeam_spec=fits.open(beam_spec)
+       
+            ftemplate[0].data=foutname[0].data * fbeam[0].data * (fspec_index[0].data+fbeam_spec[0].data)
+        else:
+            ftemplate[0].data=foutname[0].data * fbeam[0].data * fspec_index[0].data
+    else:
+        ftemplate[0].data=foutname[0].data
+
+    try:
+        ftemplate[0].header['DATE-OBS']=dateobs
+    except KeyError:
+        ftemplate[0].header.update('DATE-OBS',dateobs)
+      
+    ftemplate.writeto(outnt2 + '.fits')
+    logger.info('Wrote scaled Taylor term to %s' % (outnt2 + '.fits'))
+
+    # import as CASA images
+    if os.path.exists(outname + '.im') and clobber:
+        shutil.rmtree(outname + '.im')
+    if os.path.exists(outnt2 + '.im') and clobber:
+        shutil.rmtree(outnt2 + '.im')
+    # use the local versions of this 
+    # that I defined above
+    importfits(outname + '.fits',outname + '.im')
+    importfits(outnt2 + '.fits',outnt2 + '.im')
+    if not os.path.exists(outname + '.im'):
+        logger.error('Cannot find %s' % (outname + '.im'))
+        return None
+    if not os.path.exists(outnt2 + '.im'):
+        logger.error('Cannot find %s' % (outnt2 + '.im'))
+        return None
+   
+    logger.info('Fourier transforming model...')
+    cfg=tasklib.FtConfig()
+    cfg.vis=vis
+    cfg.model=[outname + '.im',outnt2+'.im']
+    cfg.usescratch=True
+    tasklib.ft(cfg)
+    
+    logger.info('Calibrating...')
+    cfg=tasklib.GaincalConfig()
+    cfg.vis=vis
+    cfg.caltable=caltable
+    cfg.refant=refant
+    cfg.uvrange=uvrange
+    cfg.gaintype = 'B'
+    cfg.combine = ['scan']
+    cfg.solint = 'inf'
+    cfg.solnorm = False
+    tasklib.gaincal(cfg)
+
+    logger.info('Scaling YY solutions by beam ratio...')
+    # Scale YY solution by the ratio
+    tb.open(caltable)
+    G = tb.getcol('CPARAM')
+    tb.close()
+    
+    new_gains = numpy.empty(shape=G.shape, dtype=numpy.complex128)
+    
+    # XX gains stay the same
+    new_gains[0,:,:]=G[0,:,:]
+    # YY gains are scaled
+    new_gains[1,:,:]=ratiovalue*G[1,:,:]
+
+    tb.open(caltable,nomodify=False)
+    tb.putcol('CPARAM',new_gains)
+    tb.putkeyword('MODEL',model)
+    tb.putkeyword('SPECINDX',spec_index)
+    tb.putkeyword('BMRATIO',ratiovalue)
+    try:
+        tb.putkeyword('MWAVER',mwapy.__version__)
+    except:
+        pass
+    tb.close()
+    logger.info('Created %s!' % caltable)
+    return caltable
 
 ##################################################
 def calibrate_casa(obsid, directory=None, minuv=60):
@@ -386,14 +706,13 @@ def calibrate_casa(obsid, directory=None, minuv=60):
     basedir=os.path.abspath(os.curdir)
     if directory is None:
         directory=basedir
-    from mwapy import casac_ft_beam as ft_beam
     if minuv is not None:
-        result=ft_beam.ft_beam(vis='%s.ms' % obsid,
-                               uvrange='>%dm' % minuv,
-                               outdir='%s' % directory)
+        result=ft_beam(vis='%s.ms' % obsid,
+                       uvrange='>%dm' % minuv,
+                       outdir='%s' % directory)
     else:
-        result=ft_beam.ft_beam(vis='%s.ms' % obsid,
-                               outdir='%s' % directory)
+        result=ft_beam(vis='%s.ms' % obsid,
+                       outdir='%s' % directory)
     if result is None:
         logger.error('Unable to create calibration table')
         return None

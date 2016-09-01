@@ -59,10 +59,8 @@ except ImportError:
     _CASA=False
 
 try:
-    import BANE  
-    import MIMAS
     from AegeanTools.regions import Region
-    from AegeanTools import source_finder
+    from AegeanTools import source_finder, BANE, MIMAS
     # make the logging output from aegean more reasonable
     logging.getLogger("Aegean").setLevel(logging.INFO)
     _aegean=True

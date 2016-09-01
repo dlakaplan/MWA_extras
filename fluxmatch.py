@@ -9,10 +9,8 @@ from astropy.table import Table,Column
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.wcs import WCS
-import BANE  
-import MIMAS
 from AegeanTools.regions import Region
-from AegeanTools import source_finder
+from AegeanTools import source_finder,BANE
 import mwapy
 from mwapy.pb import make_beam
 from mwapy import metadata
@@ -165,7 +163,7 @@ def fluxmatch(image,
     if beam is None:
         logger.warning('Did not generate primary beam: will ignore')
         minbeam=None
-    if not os.path.exists(beam):
+    if beam is not None and not os.path.exists(beam):
         logger.warning('Cannot find primary beam %s: will ignore' % beam)
         minbeam=None                
         beam=None
@@ -184,7 +182,7 @@ def fluxmatch(image,
     frequency=fimage[0].header['CRVAL3']
     w=WCS(fimage[0].header,naxis=2)
     frmsimage=fits.open(rmsimage)
-    minrms=frmsimage[0].data.min()
+    minrms=numpy.nanmin(frmsimage[0].data)
     logger.info('Minimum RMS in image is %.1f mJy' % (minrms*1e3))
 
     if beam is not None:

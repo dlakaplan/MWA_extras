@@ -113,6 +113,8 @@ def fluxmatch(image,
               catalog='GLEAMIDR3.fits',
               fluxcolumn=None,
               fluxerrcolumn=None,
+              racolumn='RAJ2000',
+              deccolumn='DECJ2000',              
               nsigma=10,
               rmsfactor=3,
               matchradius=120,
@@ -130,6 +132,8 @@ def fluxmatch(image,
     catalog='GLEAMIDR3.fits',
     fluxcolumn=None,
     fluxerrcolumn=None,
+    racolumn='RAJ2000',
+    deccolumn='DECJ2000'
     signal-to-noise for source finding
     nsigma=10,
     ratio of local rms to minimum image RMS that is OK
@@ -236,7 +240,10 @@ def fluxmatch(image,
         except:
             logger.error('Unable to read catalog %s' % catalog)
             return None        
-    bandfrequencies=numpy.array([int(s.split('_')[-1]) for s in numpy.array(catalogTable.colnames)[numpy.nonzero(numpy.array([('int_flux' in c) and not ('deep' in c) and not ('wide' in c) for c in catalogTable.colnames]))[0]]])
+    try:
+        bandfrequencies=numpy.array([int(s.split('_')[-1]) for s in numpy.array(catalogTable.colnames)[numpy.nonzero(numpy.array([('int_flux' in c) and not ('deep' in c) and not ('wide' in c) for c in catalogTable.colnames]))[0]]])
+    except:
+        bandfrequencies=[]
     
     if len(bandfrequencies)>0:
         # find the indices of the bands just above and below the observation
@@ -267,25 +274,26 @@ def fluxmatch(image,
             return None
 
     try:
-        catalogcoords=SkyCoord(catalogTable['RAJ2000'],
-                               catalogTable['DECJ2000'],unit=(u.deg,u.deg))
+        catalogcoords=SkyCoord(catalogTable[racolumn],
+                               catalogTable[deccolumn],unit=(u.deg,u.deg))
     except KeyError:
         catalogcoords=SkyCoord(catalogTable['RAJ2000'],
                                catalogTable['DEJ2000'],unit=(u.deg,u.deg))
+        racolumn='RAJ2000'
+        deccolumn='DEJ2000'
 
     # match the catalog to the data
     idx,sep2d,sep3d=coords.match_to_catalog_sky(catalogcoords)
     # add the matched columns to the soure table
-    sourcesTable.add_column(Column(catalogTable['Name'][idx],
-                                   name='Name'))
-    sourcesTable.add_column(Column(catalogTable['RAJ2000'][idx],
-                                   name='GLEAMRA'))
     try:
-        sourcesTable.add_column(Column(catalogTable['DECJ2000'][idx],
-                                       name='GLEAMDEC'))
-    except KeyError:
-        sourcesTable.add_column(Column(catalogTable['DEJ2000'][idx],
-                                       name='GLEAMDEC'))
+        sourcesTable.add_column(Column(catalogTable['Name'][idx],
+                                       name='Name'))
+    except:
+        pass
+    sourcesTable.add_column(Column(catalogTable[racolumn][idx],
+                                   name='GLEAMRA'))
+    sourcesTable.add_column(Column(catalogTable[deccolumn][idx],
+                                   name='GLEAMDEC'))
     sourcesTable.add_column(Column(sep2d.to(u.arcsec),
                                    name='GLEAMSep'))
     sourcesTable.add_column(Column(gleamflux[idx],
@@ -447,15 +455,18 @@ def fluxmatch(image,
         #plt.gca().set_xscale('log')
         #plt.gca().set_yscale('log')
         plt.axis([0.1,100,0.1,100])
-        plt.xlabel('Flux Density in %s (Jy)' % catalog,fontsize=16)
-        plt.ylabel('Flux Density in %s (Jy)' % imagename,fontsize=16)
+        plt.xlabel('Flux Density in %s (Jy)' % catalog.replace('_','\_')
+                   ,fontsize=16)
+        plt.ylabel('Flux Density in %s (Jy)' % imagename.replace('_','\_'),
+                   fontsize=16)
         plt.gca().tick_params(labelsize=16)
         plt.savefig('%s_fluxflux.pdf' % outbase)
         logger.info('Wrote %s_fluxflux.pdf' % outbase)
 
         plt.clf()
         plt.hist(ratio[good],30)
-        plt.xlabel('Flux Density in %s / Flux Density in %s' % (imagename,catalog),
+        plt.xlabel('Flux Density in %s / Flux Density in %s' % (imagename.replace('_','\_'),
+                                                                catalog.replace('_','\_')),
                    fontsize=16)
         plt.ylabel('Number of Sources',fontsize=16)
         plt.plot(fittedratio*numpy.array([1,1]),
@@ -483,8 +494,10 @@ def fluxmatch(image,
                  'ro')
         plt.plot(plt.gca().get_xlim(),[0,0],'k--')
         plt.plot([0,0],plt.gca().get_ylim(),'k--')
-        plt.xlabel('$\\alpha$(%s)-$\\alpha$(%s)' % (imagename,catalog),fontsize=16)
-        plt.ylabel('$\\delta$(%s)-$\\delta$(%s)' % (imagename,catalog),fontsize=16)
+        plt.xlabel('$\\alpha$(%s)-$\\alpha$(%s)' % (imagename.replace('_','\_'),
+                                                    catalog.replace('_','\_')),fontsize=16)
+        plt.ylabel('$\\delta$(%s)-$\\delta$(%s)' % (imagename.replace('_','\_'),
+                                                    catalog.replace('_','\_')),fontsize=16)
         plt.gca().tick_params(labelsize=16)
         plt.savefig('%s_position.pdf' % outbase)
         logger.info('Wrote %s_position.pdf' % outbase)    
@@ -498,7 +511,8 @@ def fluxmatch(image,
         plt.plot(matchradius.to(u.arcsec).value*numpy.array([1,1]),
                  plt.gca().get_ylim(),
                  'k--')
-        plt.xlabel('Separation %s vs. %s (arcsec)' % (imagename,catalog),
+        plt.xlabel('Separation %s vs. %s (arcsec)' % (imagename.replace('_','\_'),
+                                                      catalog.replace('_','\_')),
                    fontsize=16)
         plt.ylabel('Number of sources',fontsize=16)
         plt.gca().tick_params(labelsize=16)
@@ -526,6 +540,10 @@ def main():
                       help='Column for flux density if not GLEAM standard [default=%default]')
     parser.add_option('--fluxerrcol',dest='fluxerrcolumn',default='FLUXERR',
                       help='Column for flux density errors if not GLEAM standard [default=%default]')
+    parser.add_option('--racolumn',dest='racolumn',default='RAJ2000',
+                      help='Column for RA if not GLEAM standard [default=%default]')
+    parser.add_option('--deccolumn',dest='deccolumn',default='DECJ2000',
+                      help='Column for Dec if not GLEAM standard [default=%default]')
     parser.add_option('--nsigma',dest='nsigma',default=10,type='float',
                       help='Threshold in sigma for source finding [default=%default]')
     parser.add_option('--match',dest='matchradius',default=60,type='float',
@@ -565,6 +583,8 @@ def main():
                       catalog=options.catalog,
                       fluxcolumn=options.fluxcolumn,
                       fluxerrcolumn=options.fluxerrcolumn,
+                      racolumn=options.racolumn,
+                      deccolumn=options.deccolumn,
                       nsigma=options.nsigma,
                       matchradius=options.matchradius,
                       rmsfactor=options.rmsfactor,

@@ -1947,7 +1947,7 @@ class Observation(metadata.MWA_Observation):
             else:
                 fb=fits.open(file)
                 f=fits.open(self.rawfiles[ifile])
-                if not fb[0].header['PBMODEL']==self.beammodel:
+                if not 'PBMODEL' in fb[0].header.keys() and fb[0].header['PBMODEL']==self.beammodel:
                     remake=True
                 keys=['NAXIS1','NAXIS2',
                       'CRVAL1','CRVAL2',

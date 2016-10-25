@@ -1604,13 +1604,16 @@ class Observation(metadata.MWA_Observation):
                                      '[MHz] Center frequency of observation')
             if subbands > 1:
                 try:
-                    startchannel=f[0].header['WSCCHANS']
-                    stopchannel=f[0].header['WSCCHANE']
-                    f[0].header['NCHANS']=(int(stopchannel-startchannel), 'Number of fine channels in spectrum')
-                    f[0].header['BANDWDTH']=((stopchannel-startchannel)*self.chanwidth/1e3, 
-                                             '[MHz] Total bandwidth')
+                    f[0].header['FREQCENT']=f[0].header['CRVAL3']/1e6
+                    f[0].header['BANDWDTH']=(f[0].header['CDELT3']/1e6,'[MHz] Total bandwidth')
+                    f[0].header['NCHANS']=(int(round(f[0].header['CDELT3']/self.chanwidth)),'Number of fine channels in spectrum')
+                    # startchannel=f[0].header['WSCCHANS']
+                    # stopchannel=f[0].header['WSCCHANE']                    
+                    # f[0].header['NCHANS']=(int(stopchannel-startchannel), 'Number of fine channels in spectrum')
+                    # f[0].header['BANDWDTH']=((stopchannel-startchannel)*self.chanwidth/1e3, 
+                    #                         '[MHz] Total bandwidth')
                     
-                    f[0].header['FREQCENT']=f[0].header['FREQCENT']+(self.chanwidth/1e3)*((stopchannel-startchannel)/2-self.nchans/2)
+                    # f[0].header['FREQCENT']=f[0].header['FREQCENT']+(self.chanwidth/1e3)*((stopchannel-startchannel)/2-self.nchans/2)
                 except:
                     pass
             f.verify('fix')
@@ -2722,6 +2725,8 @@ def main():
     imaging_parser.add_option('--subbands',dest='subbands',default=1,
                               type='int',
                               help='Number of subbands to image [default=%default]')
+    parser.add_option('--BANE',dest='BANE',default=False,action='store_true',
+                      help='Run BANE for background and RMS estimation?')
     parser.add_option('--beam',dest='beammodel',default='2014i',type='choice',
                       choices=['2014i','2014','2013'],
                       help='Primary beam model [default=%default]')
@@ -3400,6 +3405,11 @@ def main():
                         observation_data[i]['rashift_sec']=rashift
                         observation_data[i]['decshift_arcsec']=decshift
                     
+
+        if options.BANE:
+            for image in results:
+                rmsimage,bgimage=get_rms_background(image)
+                logger.info('Created rms image %s, background image %s' % (rmsimage,bgimage))
 
         # do another round of source finding if we did selfcal
         if options.selfcal:

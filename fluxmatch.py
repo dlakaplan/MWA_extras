@@ -125,6 +125,10 @@ def fluxmatch(image,
               limit=10,
               refineposition=False,
               update=False,
+              prefix=None,
+              otherimages=[],
+              updatepoln=False,
+              updatebane=False,
               plot=True,
               region=True,
               cores=1):
@@ -160,6 +164,21 @@ def fluxmatch(image,
     if not os.path.exists(image):
         logger.error('Cannot find input image %s' % image)
         return None
+    if updatepoln:
+        for stokes in ['Q','U','V']:
+            if os.path.exists(image.replace('-I.fits','-%s.fits' % stokes)):
+                otherimages.append(image.replace('-I.fits','-%s.fits' % stokes))
+                logger.info('Will also scale %s' % otherimages[-1])
+    if updatebane:
+        for ext in ['rms','bkg']:
+            if os.path.exists(image.replace('-I.fits','-I_%s.fits' % ext)):
+                otherimages.append(image.replace('-I.fits','-I_%s.fits' % ext))
+                logger.info('Will also scale %s' % otherimages[-1])
+            if updatepoln:
+                for stokes in ['Q','U','V']:                
+                    if os.path.exists(image.replace('-I.fits','-%s_%s.fits' % (stokes,ext))):
+                        otherimages.append(image.replace('-I.fits','-%s_%s.fits' % (stokes,ext)))
+                        logger.info('Will also scale %s' % otherimages[-1])
     if not os.path.exists(catalog):
         logger.error('Cannot find GLEAM catalog %s' % catalog)
         return None
@@ -348,8 +367,18 @@ def fluxmatch(image,
 
         # require that all sources are > 5 sigma detections
         # and that flux uncertainties are > 0
-        good=good & (sourcesTable['IntFluxErr']<0.2*sourcesTable['IntFlux']) & (sourcesTable['IntFluxErr']>0) & (sourcesTable['GLEAMFluxErr']>0) & (sourcesTable['GLEAMFluxErr']<0.2*sourcesTable['GLEAMFlux'])
-        good=good & (sourcesTable['GLEAMFlux']>=sourcesTable['IntFlux'][good].min())
+        ignorefluxerrs=True
+        if numpy.all(sourcesTable['IntFluxErr']<0) or ignorefluxerrs:
+            logger.warning('All source uncertainties are < 0: will ignore')
+        else:
+            good=good & (sourcesTable['IntFluxErr']<0.2*sourcesTable['IntFlux']) & (sourcesTable['IntFluxErr']>0) & (sourcesTable['GLEAMFluxErr']>0) & (sourcesTable['GLEAMFluxErr']<0.2*sourcesTable['GLEAMFlux'])
+        try:
+            good=good & (sourcesTable['GLEAMFlux']>=sourcesTable['IntFlux'][good].min())
+            pass
+        except ValueError:
+            logger.warning('No good sources left')
+            good=numpy.array([False]*len(good))
+            
         logger.info('%04d/%04d sources match all cuts' % (good.sum(),
                                                           len(good)))
         if good.sum()<5:
@@ -419,6 +448,8 @@ def fluxmatch(image,
             logger.warning('Ratio exceeds reasonable limits; skipping...')
         else:
             fimage=fits.open(image,'update')
+            if not 'BEAM' in fimage[0].header.keys():
+                fimage[0].header['BEAM']=beam
             fimage[0].data/=fittedratio
             fimage[0].header['FLUXSCAL']=(fittedratio,'Flux scaling relative to catalog')
             fimage[0].header['FLUX_ERR']=(fittedratioerr,'Flux scaling uncertainty relative to catalog')
@@ -434,9 +465,49 @@ def fluxmatch(image,
 
             if 'IMAGERMS' in fimage[0].header.keys():
                 fimage[0].header['IMAGERMS']/=fittedratio
-            fimage.flush()
-            logger.info('Scaled %s by %.3f' % (image,fittedratio))
+            if prefix is None:
+                fimage.flush()
+                logger.info('Scaled %s by %.3f' % (image,fittedratio))
+            else:
+                p,f=os.path.split(image)
+                outfile=os.path.join(p,prefix + f)
+                if os.path.exists(outfile):
+                    os.remove(outfile)
+                fimage.writeto(outfile)
+                logger.info('Scaled %s by %.3f and wrote to %s' % (image,fittedratio,outfile))
+
         
+            if otherimages is not None and len(otherimages)>0:
+                # also update some other images
+                for otherimage in otherimages:
+                    foimage=fits.open(otherimage,'update')
+                    foimage[0].data/=fittedratio
+                    foimage[0].header['FLUXIMG']=(image, 'Image used for flux scaling')
+                    foimage[0].header['FLUXSCAL']=(fittedratio,'Flux scaling relative to catalog')
+                    foimage[0].header['FLUX_ERR']=(fittedratioerr,'Flux scaling uncertainty relative to catalog')
+                    foimage[0].header['FLUXCAT']=(catalog,'Flux scaling catalog')
+                    foimage[0].header['NFLUXSRC']=(good.sum(),'Number of sources used for flux scaling')
+                    foimage[0].header['FLUXCHI2']=(chisq,'Flux scaling chi-squared')
+                    foimage[0].header['FLUXSLOP']=(fitres[0],'Flux scaling slope')
+                    if refineposition:
+                        foimage[0].header['RASHIFT']=(dRA[good].mean()*3600,'[s] RA Shift for catalog match')
+                        foimage[0].header['DECSHIFT']=(dDEC[good].mean()*3600,'[arcsec] DEC Shift for catalog match')
+                        foimage[0].header['CRVAL1']-=dRA[good].mean()
+                        foimage[0].header['CRVAL2']-=dDEC[good].mean()
+
+                    if 'IMAGERMS' in fimage[0].header.keys():
+                        foimage[0].header['IMAGERMS']/=fittedratio
+                    if prefix is None:
+                        foimage.flush()
+                        logger.info('Scaled %s by %.3f' % (otherimage,fittedratio))
+                    else:
+                        p,f=os.path.split(otherimage)
+                        outfile=os.path.join(p,prefix + f)
+                        if os.path.exists(outfile):
+                            os.remove(outfile)
+                        fimage.writeto(outfile)
+                        logger.info('Scaled %s by %.3f and wrote to %s' % (otherimage,fittedratio,outfile))
+
 
     if plot:
 
@@ -562,6 +633,12 @@ def main():
                       help='Max ratio of new to old fluxes (or old to new) [default=%default]')
     parser.add_option('--update',action="store_true",dest='update',default=False,
                       help="Update original FITS image?")
+    parser.add_option('--prefix',dest='prefix',default=None,type='str',
+                      help='Prefix for writing to a new file [default=overwrite]')
+    parser.add_option('--updatepoln','--updatestokes',action="store_true",dest='updatepoln',default=False,
+                      help="Update other polarizations?")
+    parser.add_option('--updatebane',action="store_true",dest='updatebane',default=False,
+                      help="Update BANE output (_rms, _bks)?")    
     parser.add_option('--refineposition',dest='refineposition',default=False,action='store_true',
                       help="Refine positions?")
     parser.add_option('--plot',action="store_true",dest="plot",default=False,
@@ -594,6 +671,9 @@ def main():
                       limit=options.ratiolimit,
                       rejectsigma=options.rejectsigma,
                       update=options.update,
+                      prefix=options.prefix,
+                      updatepoln=options.updatepoln,
+                      updatebane=options.updatebane,
                       refineposition=options.refineposition,
                       plot=options.plot,
                       region=options.region)

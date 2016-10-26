@@ -260,7 +260,7 @@ def fluxmatch(image,
             logger.error('Unable to read catalog %s' % catalog)
             return None        
     try:
-        bandfrequencies=numpy.array([int(s.split('_')[-1]) for s in numpy.array(catalogTable.colnames)[numpy.nonzero(numpy.array([('int_flux' in c) and not ('deep' in c) and not ('wide' in c) for c in catalogTable.colnames]))[0]]])
+        bandfrequencies=numpy.array([int(s.split('_')[-1]) for s in numpy.array(catalogTable.colnames)[numpy.nonzero(numpy.array([('int_flux' in c) and not ('deep' in c) and not ('wide' in c) ('fit' in c) for c in catalogTable.colnames]))[0]]])
     except:
         bandfrequencies=[]
     

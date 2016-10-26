@@ -674,6 +674,7 @@ def main():
                       prefix=options.prefix,
                       updatepoln=options.updatepoln,
                       updatebane=options.updatebane,
+                      otherimages=[],
                       refineposition=options.refineposition,
                       plot=options.plot,
                       region=options.region)

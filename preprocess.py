@@ -740,6 +740,15 @@ class Observation():
                allowmissing=True):
 
 
+        if timeres < self.observation.inttime:
+            logger.warning('Desired time resolution %.1f s is < native time resolution %.1f s' % (
+                timeres,self.observation.inttime))
+            timeres=self.observation.inttime
+            logger.warning('Changing to %.1f s' % timeres)
+        if freqres < self.observation.fine_channel:
+            logger.error('Desired frequency resolution %d kHz is < native frequency resolution %d kHz' % (
+                freqres,self.observation.fine_channel))
+            return None
         compressionfactor_time=int(timeres/self.observation.inttime)
         compressionfactor_freq=int(freqres/self.observation.fine_channel)
         logger.info('Expect compression of %d in time and %d in frequency' % (compressionfactor_time,

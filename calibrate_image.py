@@ -2670,8 +2670,8 @@ def main():
     #                          help='Do not scale the fluxes after selfcal using source finding?')    
     #control_parser.add_option('--fluxscaleregion',dest='fluxscaleregion',default=None,type='str',
     #                          help='Region for flux scaling. Default is HPBW.  Can also be radius [deg] around pointing center or MIMAS region file')
-    control_parser.add_option('--nofluxscale',dest='fluxscale',default=True,
-                              action='store_false',
+    control_parser.add_option('--fluxscale',dest='fluxscale',default=False,
+                              action='store_true',
                               help='Do not scale the fluxes with catalog matching')
     control_parser.add_option('--catalog',dest='catalog', default='/work/MWA/GLEAMIDR3.fits',
                               help='GLEAM catalog for flux scaling [default=%default]')

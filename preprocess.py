@@ -658,6 +658,7 @@ class Observation():
     def __init__(self, obsid, basedir='./', clobber=False, 
                  cleanfits=False,
                  cleanms=False,
+                 cleanflag=False,
                  checkfree=True,
                  copycommand='rsync -aruvP'):
         self.obsid=obsid
@@ -670,6 +671,7 @@ class Observation():
         self.copycommand=copycommand
         self.cleanfits=cleanfits
         self.cleanms=cleanms
+        self.cleanflag=cleanflag
         self.destination=None
         self.rawsize=None
         self.fitssize=None
@@ -705,6 +707,11 @@ class Observation():
             else:
                 logger.warning('Deleting MS file %s' % self.msfile)
                 shutil.rmtree(os.path.join(self.outputdir,self.msfile))
+        if self.cleanflag:
+            logger.warning('Deleting downloaded flag files %s/*.mwaf' % self.outputdir)
+            for f in glob.glob('%s/*.mwaf' % self.outputdir):
+                os.remove(f)
+
 
     ##############################
     def download(self, numdownload=4):
@@ -950,7 +957,7 @@ def main():
     parser.add_option('--clobber',dest='clobber',default=False,action='store_true',
                       help='Clobber existing MS file? [default=False]')
     parser.add_option('--cleanall',dest='cleanall',default=False,action='store_true',
-                      help='Delete downloaded FITS files and original MS file when done? [default=False]')
+                      help='Delete downloaded FITS files, flag files, and original MS file when done? [default=False]')
     parser.add_option('--cleanfits',dest='cleanfits',default=False,action='store_true',
                       help='Delete downloaded FITS files when done? [default=False]')
     parser.add_option('--cleanms',dest='cleanms',default=False,action='store_true',
@@ -974,6 +981,7 @@ def main():
     if options.cleanall:
         options.cleanfits=True
         options.cleanms=True
+        options.cleanflag=True
 
     loglevels = {0: [logging.DEBUG, 'DEBUG'],
                  1: [logging.INFO, 'INFO'],

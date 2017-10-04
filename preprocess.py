@@ -660,6 +660,7 @@ class Observation():
                  cleanms=False,
                  cleanflag=False,
                  checkfree=True,
+                 checksize=True,
                  copycommand='rsync -aruvP'):
         self.obsid=obsid
         self.basedir=basedir
@@ -677,6 +678,7 @@ class Observation():
         self.fitssize=None
         self.mssize=None
         self.checkfree=checkfree
+        self.checksize=checksize
 
         self.outputdir=os.path.join(self.basedir,
                                     str(self.obsid),
@@ -841,7 +843,7 @@ class Observation():
             return None
 
         newsize=get_size(self.msfile)
-        if math.fabs(newsize-self.mssize)/float(self.mssize) > 0.75:
+        if math.fabs(newsize-self.mssize)/float(self.mssize) > 0.75 and self.checksize:
             logger.error('Expected a size of %d bytes for MSfile %s, but actual file has %d bytes' % (self.mssize,
                                                                                                       self.msfile,
                                                                                                       newsize))
@@ -971,6 +973,9 @@ def main():
     parser.add_option('--ignorespace',dest='ignorespace',default=False,
                       action='store_true',
                       help='Ignore free-space for file download, processing, and copying?')
+    parser.add_option('--ignoresize',dest='ignoresize',default=False,
+                      action='store_true',
+                      help='Ignore size of the .ms file?')
     parser.add_option("-v", "--verbose", dest="loudness", default=0, action="count",
                       help="Each -v option produces more informational/debugging output")
     parser.add_option("-q", "--quiet", dest="quietness", default=0, action="count",
@@ -1099,7 +1104,8 @@ def main():
                                 clobber=options.clobber,
                                 cleanms=options.cleanms,
                                 cleanfits=options.cleanfits,
-                                checkfree=not options.ignorespace)
+                                checkfree=not options.ignorespace,
+                                checksize=not options.ignoresize)
         downloadedfiles=observation.download(numdownload=options.downloads)
         if downloadedfiles is None:
             break

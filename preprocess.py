@@ -35,10 +35,10 @@ CERT_FILE = os.path.join(os.getenv('HOME'),'obscrt.crt')
 
 ######################################################################
 class HTTPSClientAuthConnection(HTTPSConnection):
-    """ Class to make a HTTPS connection, with support for full client-based SSL Authentication"""
+    """Class to make a HTTPS connection, with support for full client-based SSL Authentication"""
 
-    def __init__(self, host, key_file, cert_file, timeout = None):
-        HTTPSConnection.__init__(self, host, key_file = key_file, cert_file = cert_file)
+    def __init__(self, host, key_file, cert_file, timeout=None):
+        HTTPSConnection.__init__(self, host, key_file=key_file, cert_file=cert_file)
         self.key_file = key_file
         self.cert_file = cert_file
         self.ca_file = None
@@ -58,7 +58,8 @@ class HTTPSClientAuthConnection(HTTPSConnection):
             self._tunnel()
         # If there's no CA File, don't force Server Certificate Check
         if self.ca_file:
-            self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file, ca_certs=self.ca_file, cert_reqs=ssl.CERT_REQUIRED)
+            self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file,
+                                        ca_certs=self.ca_file, cert_reqs=ssl.CERT_REQUIRED)
         else:
             self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file, cert_reqs=ssl.CERT_NONE)
 
@@ -115,7 +116,7 @@ class FileStatus():
 #     os.chmod(CERT_FILE, stat.S_IRUSR)
 
 ######################################################################
-def query_observation(obs, host, flagonly, uvfits, chstart, chcount):
+def query_observation(obs=None, host=None, flagonly=False, metaonly=False, uvfits=False, chstart=None, chcount=False):
 
     if not os.path.exists(KEY_FILE):
         logger.error('Unable to find HTTPS key file %s' % KEY_FILE)
@@ -124,11 +125,10 @@ def query_observation(obs, host, flagonly, uvfits, chstart, chcount):
         logger.error('Unable to find HTTPS certificate file %s' % CERT_FILE)
         return None
 
+
     response = None
     try:
-
-        conn = HTTPSClientAuthConnection(host, key_file = KEY_FILE,
-                                                cert_file = CERT_FILE)
+        conn = HTTPSClientAuthConnection(host, key_file=KEY_FILE, cert_file=CERT_FILE)
         conn.request('GET', '/QUERY?query=files_like&like=%s%%&format=json' % obs)
         response = conn.getresponse()
         if response.status != 200:
@@ -146,7 +146,6 @@ def query_observation(obs, host, flagonly, uvfits, chstart, chcount):
                 raise Exception('socket read error')
             resultbuffer.append(buff)
             readin += len(buff)
-
         filemap = {}
         json_files = json.loads(b''.join(resultbuffer).decode('utf8'))
         files = json_files.get('files_like', [])
@@ -157,25 +156,24 @@ def query_observation(obs, host, flagonly, uvfits, chstart, chcount):
             filename = f['col3']
             filesize = f['col6']
 
-            if flagonly or uvfits:
+            if flagonly or uvfits or metaonly:
                 if 'flags.zip' in filename and flagonly:
                     add = True
-
                 if '.uvfits' in filename and uvfits:
                     add = True
+                if '_ppds' in filename and metaonly:
+                    add = True
             else:
-                if chstart != None:
+                if chstart is not None:
                     # it must be a valid MWA visibility fits file which contains
-                    # the course channel. If valid extract the course channel
+                    # the coarse channel. If valid extract the coarse channel
                     # and check with the range requested.
                     try:
                         num = int(filename.split('_')[2].split('gpubox')[1])
-                        if num >= chstart and num < chstart+chcount:
+                        if (num >= chstart) and (num < chstart+chcount):
                             add = True
-                    except Exception as e:
+                    except:
                         pass
-                        #raise Exception('Invalid course channel filename %s' % filename);
-
                 else:
                     add = True
 
@@ -245,7 +243,7 @@ def download_worker(url, host, size, filename, sem, out, stat, bufsize):
 
 
 ######################################################################
-def run_obsdownload(obs,ngashost='fe1.pawsey.ivec.org:8777',
+def run_obsdownload(obs,ngashost='fe1.pawsey.org.au:8777',
                     numdownload=4):
     try:
         # get system TCP buffer size
@@ -259,9 +257,7 @@ def run_obsdownload(obs,ngashost='fe1.pawsey.ivec.org:8777',
 
         logger.info('Finding observation %s' % (obs,))
             
-        fileresult = query_observation(obs, ngashost,
-                                       False,False,None,24)
-
+        fileresult = query_observation(obs, ngashost)
         if len(fileresult) <= 0:
             logger.error('No file(s) found for observation %s' % (obs,))
             return None

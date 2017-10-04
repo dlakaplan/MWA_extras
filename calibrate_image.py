@@ -27,7 +27,7 @@ import subprocess,fcntl
 from astropy.table import Table,Column
 import collections,glob,numpy
 from astropy.io import fits
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord,get_sun
 import astropy
 from astropy import constants as c, units as u
 from astropy.wcs import WCS
@@ -1048,12 +1048,15 @@ class Observation(metadata.MWA_Observation):
         if os.path.exists(os.path.join(self.basedir,'%s.metafits' % self.obsid)):
             self.metafits=os.path.join(self.basedir,'%s.metafits' % self.obsid)
         else:
+            logger.info('Retrieving metafits for %d' % self.obsid)
             self.metafits=makemetafits(self.obsid, directory=self.basedir)
             
         self.observation=metadata.MWA_Observation(self.obsid)
+        self.sun=get_sun(Time(self.obsid,format='gps',scale='utc'))
 
         if not os.path.exists('%s.ms' % self.obsid):
             logger.error('MS file %s.ms does not exist' % self.obsid)
+        logger.info('Retrieving info from %s.ms' % self.obsid)
         result=get_msinfo('%s.ms' % self.obsid)
         if result is None:
             logger.error('Cannot get info for MS file %s.ms' % self.obsid)
@@ -1585,6 +1588,8 @@ class Observation(metadata.MWA_Observation):
                                     fm[0].header.comments[k])
                 except:
                     pass
+            f[0].header['SUN-RA']=(self.sun.ra.value, '[deg] Geocentric RA of Sun')
+            f[0].header['SUN-Dec']=(self.sun.dec.value, '[deg] Geocentric Dec of Sun')
             prev_inttime=f[0].header['INTTIME']
             prev_finechan=f[0].header['FINECHAN']
             prev_nchan=f[0].header['NCHANS']
@@ -2901,6 +2906,7 @@ def main():
             eh.exit(1)
         file=files[i]
         obsid=int(file.split('.')[0])
+        logger.info('Initializing Observation for %d' % obsid)
         observations[obsid]=Observation(obsid, 
                                         outputdir=options.out,
                                         caltype=options.caltype,

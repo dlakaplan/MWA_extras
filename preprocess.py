@@ -722,10 +722,14 @@ class Observation():
         #downloadedfiles2=run_obsdownload(self.obsid, numdownload=numdownload)
         #for k in downloadedfiles2.keys():
         #    self.downloadedfiles[k]=downloadedfiles2[k]
+        
+        os.system(s)
+
         return self.downloadedfiles
     ##############################
-    def makemetafits(self):        
-        m=metadata.instrument_configuration(self.obsid)
+    def makemetafits(self, min_bad_dipoles=5):        
+        logger.info('Making metafits with min_bad_dipoles=%d' % min_bad_dipoles)
+        m=metadata.instrument_configuration(self.obsid, min_bad_dipoles=min_bad_dipoles)
         h=m.make_metafits()
         self.metafits=os.path.join(self.outputdir,'%s.metafits' % self.obsid)
         if os.path.exists(self.metafits):
@@ -947,6 +951,8 @@ def main():
                       help='Output RA phase center (deg) [default=metafits]')
     parser.add_option('--dec',dest='dec',default=None,
                       help='Output Dec phase center (deg) [default=metafits]')
+    parser.add_option('--baddipoles',dest='minbaddipoles',default=2,type='int',
+                      help='Number of bad dipoles above which tile is flagged [default=%default]')
     parser.add_option('--cal',dest='cal',default=False,
                       action='store_true',
                       help='Always include a calibrator observation?')
@@ -1106,7 +1112,7 @@ def main():
         if downloadedfiles is None:
             break
 
-        if observation.makemetafits() is None:
+        if observation.makemetafits(min_bad_dipoles=options.minbaddipoles) is None:
             break
             
         if observation.observation.calibration is not None and observation.observation.calibration:
